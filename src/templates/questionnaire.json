@@ -1,0 +1,324 @@
+{
+  "version": "1.0.0",
+  "template": "email-agent-generator",
+  "language": "pl",
+  "description": "Kwestionariusz do wygenerowania agenta mailowego w n8n dla dowolnego biznesu.",
+  "sections": [
+    {
+      "id": "business_profile",
+      "title": "Profil biznesu",
+      "questions": [
+        {
+          "id": "business_name",
+          "type": "text",
+          "label": "Nazwa firmy",
+          "required": true
+        },
+        {
+          "id": "industry",
+          "type": "text",
+          "label": "Branza",
+          "required": true
+        },
+        {
+          "id": "language_primary",
+          "type": "select",
+          "label": "Glowny jezyk odpowiedzi",
+          "required": true,
+          "options": [
+            "pl",
+            "en",
+            "de",
+            "fr",
+            "es"
+          ]
+        },
+        {
+          "id": "brand_tone",
+          "type": "select",
+          "label": "Ton marki",
+          "required": true,
+          "options": [
+            "formal",
+            "semi_formal",
+            "informal"
+          ]
+        },
+        {
+          "id": "signature_name",
+          "type": "text",
+          "label": "Imie i nazwisko w podpisie",
+          "required": true
+        },
+        {
+          "id": "signature_company",
+          "type": "text",
+          "label": "Nazwa firmy w podpisie",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "channels_and_tools",
+      "title": "Kanaly i narzedzia",
+      "questions": [
+        {
+          "id": "email_provider",
+          "type": "select",
+          "label": "Provider email",
+          "required": true,
+          "options": [
+            "gmail",
+            "outlook",
+            "imap"
+          ]
+        },
+        {
+          "id": "email_inbox_address",
+          "type": "text",
+          "label": "Adres skrzynki obslugiwanej przez agenta",
+          "required": true
+        },
+        {
+          "id": "email_query_filter",
+          "type": "text",
+          "label": "Filtr zapytania (dla Gmail/IMAP)",
+          "required": true,
+          "default": "in:inbox -from:me -label:sent -label:draft"
+        },
+        {
+          "id": "approval_channel",
+          "type": "select",
+          "label": "Kanał akceptacji draftu",
+          "required": true,
+          "options": [
+            "google_chat",
+            "slack",
+            "telegram",
+            "none"
+          ]
+        },
+        {
+          "id": "storage_backend",
+          "type": "select",
+          "label": "Backend storage dla kolejki draftow",
+          "required": true,
+          "options": [
+            "airtable",
+            "postgres",
+            "google_sheets"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "intent_routing",
+      "title": "Intencje i routing",
+      "questions": [
+        {
+          "id": "intents",
+          "type": "array",
+          "label": "Lista intencji",
+          "required": true,
+          "item_schema": {
+            "name": "string",
+            "description": "string",
+            "route_key": "string",
+            "auto_reply_enabled": "boolean",
+            "requires_approval": "boolean"
+          },
+          "default": [
+            {
+              "name": "new_inquiry",
+              "description": "Nowe zapytanie od klienta",
+              "route_key": "new_inquiry",
+              "auto_reply_enabled": true,
+              "requires_approval": true
+            },
+            {
+              "name": "follow_up",
+              "description": "Kontynuacja rozmowy",
+              "route_key": "follow_up",
+              "auto_reply_enabled": true,
+              "requires_approval": true
+            },
+            {
+              "name": "formalnosci",
+              "description": "Sprawy dokumentowe i formalne",
+              "route_key": "formalnosci",
+              "auto_reply_enabled": true,
+              "requires_approval": true
+            },
+            {
+              "name": "ignore",
+              "description": "Spam / systemowe / niebiznesowe",
+              "route_key": "ignore",
+              "auto_reply_enabled": false,
+              "requires_approval": false
+            }
+          ]
+        },
+        {
+          "id": "label_mapping",
+          "type": "array",
+          "label": "Mapowanie intencja -> etykieta skrzynki",
+          "required": false,
+          "item_schema": {
+            "intent": "string",
+            "label_id": "string"
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_and_policy",
+      "title": "KB i polityka odpowiedzi",
+      "questions": [
+        {
+          "id": "must_follow_rules",
+          "type": "textarea",
+          "label": "Reguly, ktore agent musi stosowac",
+          "required": true
+        },
+        {
+          "id": "forbidden_phrases",
+          "type": "array_text",
+          "label": "Zwroty zakazane",
+          "required": false
+        },
+        {
+          "id": "pricing_and_offer_policy",
+          "type": "textarea",
+          "label": "Informacje o ofercie i cenniku (co ma zawierać, czy podawać ceny, opisy usług)",
+          "required": true
+        },
+        {
+          "id": "max_questions_per_reply",
+          "type": "number",
+          "label": "Maksymalna liczba pytan w 1 odpowiedzi",
+          "required": true,
+          "default": 2
+        },
+        {
+          "id": "sla_response_hours",
+          "type": "number",
+          "label": "SLA odpowiedzi (w godzinach)",
+          "required": true,
+          "default": 24
+        },
+        {
+          "id": "knowledge_base_entries",
+          "type": "array",
+          "label": "Baza wiedzy klienta (FAQ/Materiały)",
+          "required": false,
+          "item_schema": {
+            "topic": "string",
+            "content_markdown": "textarea"
+          },
+          "default": []
+        }
+      ]
+    },
+    {
+      "id": "human_in_the_loop",
+      "title": "Akceptacja i eskalacje",
+      "questions": [
+        {
+          "id": "approval_required_default",
+          "type": "boolean",
+          "label": "Czy domyslnie wymagac akceptacji czlowieka",
+          "required": true,
+          "default": true
+        },
+        {
+          "id": "approval_users",
+          "type": "array_text",
+          "label": "Lista osob zatwierdzajacych (email / user id)",
+          "required": false
+        },
+        {
+          "id": "escalation_keywords",
+          "type": "array_text",
+          "label": "Slowa kluczowe wymuszajace eskalacje",
+          "required": false,
+          "default": [
+            "reklamacja",
+            "pozew",
+            "pilne",
+            "anulacja",
+            "wypowiedzenie"
+          ]
+        },
+        {
+          "id": "auto_send_without_approval_for",
+          "type": "array_text",
+          "label": "Intencje, ktore mozna wysylac bez akceptacji",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "security_and_compliance",
+      "title": "Bezpieczenstwo i compliance",
+      "questions": [
+        {
+          "id": "contains_sensitive_data",
+          "type": "boolean",
+          "label": "Czy maile zawieraja dane wrazliwe/PII",
+          "required": true,
+          "default": true
+        },
+        {
+          "id": "redaction_enabled",
+          "type": "boolean",
+          "label": "Czy maskowac dane wrazliwe w logach",
+          "required": true,
+          "default": true
+        },
+        {
+          "id": "retention_days",
+          "type": "number",
+          "label": "Retencja danych (dni)",
+          "required": true,
+          "default": 90
+        }
+      ]
+    },
+    {
+      "id": "testing",
+      "title": "Testy i walidacja",
+      "questions": [
+        {
+          "id": "test_emails_min_count",
+          "type": "number",
+          "label": "Minimalna liczba emaili testowych",
+          "required": true,
+          "default": 20
+        },
+        {
+          "id": "required_metrics",
+          "type": "array_text",
+          "label": "Wymagane metryki",
+          "required": true,
+          "default": [
+            "intent_accuracy",
+            "draft_acceptance_rate",
+            "avg_response_time",
+            "escalation_rate"
+          ]
+        },
+        {
+          "id": "launch_mode",
+          "type": "select",
+          "label": "Tryb startu",
+          "required": true,
+          "options": [
+            "shadow_mode",
+            "approval_only",
+            "limited_auto_send"
+          ]
+        }
+      ]
+    }
+  ]
+}

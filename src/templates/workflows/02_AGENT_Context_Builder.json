@@ -1,0 +1,137 @@
+{
+  "name": "[AGENT] Context Builder",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "schema": [
+            {
+              "name": "content",
+              "type": "string",
+              "displayName": "Email Content",
+              "required": true
+            },
+            {
+              "name": "classification",
+              "type": "json",
+              "displayName": "Classification Result",
+              "required": true
+            },
+            {
+              "name": "thread_history",
+              "type": "string",
+              "displayName": "Thread History",
+              "required": false
+            },
+            {
+              "name": "subject",
+              "type": "string",
+              "displayName": "Subject",
+              "required": false
+            },
+            {
+              "name": "sender_email",
+              "type": "string",
+              "displayName": "Sender Email",
+              "required": false
+            },
+            {
+              "name": "knowledge_context",
+              "type": "string",
+              "displayName": "Knowledge Base (reguły)",
+              "required": false
+            },
+            {
+              "name": "existing_task",
+              "type": "json",
+              "displayName": "Existing Task Data",
+              "required": false
+            }
+          ]
+        }
+      },
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4-turbo-preview",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=SYSTEM: Jesteś ekspertem w analizie emaili dla impresariatu koncertowego. Ekstrahuj dane, przygotuj podsumowanie i wygeneruj response_guidance – wytyczne jak odpowiadać. response_guidance MUSI być zgodny z zasadami KB.\n\n{{ $json.knowledge_context ? '**ZASADY DO STOSOWANIA (BAZA WIEDZY):**\\n' + $json.knowledge_context + '\\n\\n' : '' }}**INPUT:**\nKlasyfikacja: {{ JSON.stringify($json.classification, null, 2) }}\n\nEmail:\nOd: {{ $json.sender_email || '' }}\nTemat: {{ $json.subject || '' }}\n\nTreść:\n{{ $json.content }}\n\n{{ $json.thread_history ? 'Historia wątku:\\n' + $json.thread_history : '' }}\n\n---\n\n**ZWRÓĆ JSON:**\n\n1. **summary** - krótkie podsumowanie wątku/wiadomości (2-3 zdania)\n2. **participants** - [{email, name, role}]\n3. **artists_mentioned** - []\n4. **events_mentioned** - [{date, location, type}]\n5. **key_information** - {budget_mentioned, dates_mentioned[], requirements[], questions_asked[]}\n6. **Dane zdarzenia:** event_date (YYYY-MM-DD), event_location, event_type, budget_min, budget_max\n7. **preferred_artists** - [], **preferred_style** - null\n8. **client_name, client_email, client_phone**\n9. **is_continuation** (bool), **previous_artist_mentioned** (bool)\n10. **established_facts** - [] (co już ustalono w wątku)\n11. **missing_information** - [] (czego brakuje)\n12. **recommended_next_actions** - [] (rekomendowane kroki – źródło zadań)\n13. **response_guidance** (KRYTYCZNE):\n    - must_include: [] elementów MUSZĄCYCH być w odpowiedzi\n    - should_avoid: [] elementów których NIE pisać\n    - suggested_actions: [] konkretnych kroków\n14. **priority** - low|medium|high, **recommended_deadline** - np. \"7 dni\"\n\nUżyj null tam gdzie brak danych. Przykład formalności: response_guidance = {must_include:[\"potwierdzenie odbioru\"], should_avoid:[\"pytania o budżet\"], suggested_actions:[\"Podziękować i potwierdzić\"]}\n\n```json\n{\n  \"summary\": \"\",\n  \"participants\": [],\n  \"artists_mentioned\": [],\n  \"events_mentioned\": [],\n  \"key_information\": {\"budget_mentioned\":\"\", \"dates_mentioned\":[], \"requirements\":[], \"questions_asked\":[]},\n  \"event_date\": null,\n  \"event_location\": null,\n  \"event_type\": null,\n  \"budget_min\": null,\n  \"budget_max\": null,\n  \"preferred_artists\": [],\n  \"preferred_style\": null,\n  \"client_name\": null,\n  \"client_email\": null,\n  \"is_continuation\": false,\n  \"previous_artist_mentioned\": false,\n  \"established_facts\": [],\n  \"missing_information\": [],\n  \"recommended_next_actions\": [],\n  \"response_guidance\": {\"must_include\":[], \"should_avoid\":[], \"suggested_actions\":[]},\n  \"priority\": \"medium\",\n  \"recommended_deadline\": \"\"\n}\n```"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 2500
+        }
+      },
+      "name": "AI Context Builder",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const trigger = $('Execute Workflow Trigger').first().json;\nconst response = $input.first().json.message?.content || $input.first().json.content || '';\nconst jsonMatch = response.match(/```json\\s*\\n([\\s\\S]*?)```/);\nconst parsed = jsonMatch ? JSON.parse(jsonMatch[1].trim()) : JSON.parse(response);\nif (parsed.event_date) parsed.event_date = new Date(parsed.event_date).toISOString().split('T')[0];\nconst rg = parsed.response_guidance || {};\nif (!rg.must_include) rg.must_include = [];\nif (!rg.should_avoid) rg.should_avoid = [];\nif (!rg.suggested_actions) rg.suggested_actions = [];\nconst ctx = { ...parsed, response_guidance: rg, classification: trigger.classification };\nreturn { json: ctx };"
+      },
+      "name": "Parse & Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Context Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Context Builder": {
+      "main": [
+        [
+          {
+            "node": "Parse & Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "agent",
+      "id": "1"
+    }
+  ],
+  "pinData": {}
+}

@@ -1,0 +1,146 @@
+{
+  "name": "[AGENT] Response Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "schema": [
+            {
+              "name": "template_type",
+              "type": "string",
+              "displayName": "Template Type",
+              "required": true
+            },
+            {
+              "name": "context",
+              "type": "json",
+              "displayName": "Context Data",
+              "required": true
+            },
+            {
+              "name": "response_guidance",
+              "type": "json",
+              "displayName": "Response Guidance",
+              "required": false
+            },
+            {
+              "name": "artists",
+              "type": "json",
+              "displayName": "Artists Data",
+              "required": false
+            },
+            {
+              "name": "tone",
+              "type": "string",
+              "displayName": "Tone",
+              "required": false,
+              "default": "semi_formal"
+            },
+            {
+              "name": "previous_draft",
+              "type": "string",
+              "displayName": "Previous Draft (for corrections)",
+              "required": false
+            },
+            {
+              "name": "correction_feedback",
+              "type": "string",
+              "displayName": "Correction Feedback",
+              "required": false
+            },
+            {
+              "name": "knowledge_context",
+              "type": "string",
+              "displayName": "Knowledge Base (reguły)",
+              "required": false
+            }
+          ]
+        }
+      },
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4-turbo-preview",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=SYSTEM PROMPT:\nJesteś Tomaszem Szweckim, właścicielem Impresariatu Koncertowego.\n\nTwoim zadaniem jest wygenerować profesjonalny draft odpowiedzi na email klienta.\n\n{{ $json.knowledge_context ? '**ZASADY OBOWIĄZKOWE (BAZA WIEDZY):**\\n' + $json.knowledge_context + '\\n\\n' : '' }}{{ $json.previous_draft ? '**POPRZEDNI DRAFT:**\\n' + $json.previous_draft + '\\n\\n**FEEDBACK DO POPRAWY:**\\n' + $json.correction_feedback + '\\n\\n**WAŻNE:** Użyj poprzedniego draftu jako bazy i zastosuj dokładnie feedback użytkownika. Zachowaj wszystkie elementy które były dobre, zmień tylko to co zostało wskazane w feedback.\\n\\n' : '' }}\n\n**KONTEKST:**\n{{ JSON.stringify($json.context, null, 2) }}\n\n{{ $json.artists ? '**DOSTĘPNI ARTYŚCI:**\\n' + JSON.stringify($json.artists, null, 2) : '' }}\n\n{{ $json.response_guidance ? '**RESPONSE GUIDANCE (PILNE – zastosuj ściśle):**\\nMust Include: ' + (Array.isArray($json.response_guidance.must_include) ? $json.response_guidance.must_include.join('; ') : '') + '\\nShould Avoid: ' + (Array.isArray($json.response_guidance.should_avoid) ? $json.response_guidance.should_avoid.join('; ') : '') + '\\nSuggested Actions: ' + (Array.isArray($json.response_guidance.suggested_actions) ? $json.response_guidance.suggested_actions.join('; ') : '') + '\\n\\n' : '' }}\n\n**TON:** {{ $json.tone || 'semi_formal' }}\n\n**TYP SZABLONU:** {{ $json.template_type }}\n\n---\n\n**ZASADY PISANIA:**\n\n1. **STRUKTURA:**\n   - Powitanie (dopasowane do tonu klienta)\n   - Podziękowanie za zapytanie\n   - Odpowiedź na pytania\n   - Propozycja/oferta (jeśli dotyczy)\n   - Call to action\n   - Podpis: \"Z poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy\"\n\n2. **CONTENT:**\n   - Odnieś się konkretnie do danych z zapytania (data, lokalizacja)\n   - Jeśli są artyści - wymień ich z cenami\n   - Jeśli brak danych - uprzejmie poproś o uzupełnienie\n   - Jeśli artysta zajęty - zaproponuj alternatywy lub inne terminy\n\n3. **STYL:**\n   - Profesjonalny, ale ciepły\n   - Konkretny (podaj ceny, daty)\n   - Bez zbędnych ozdobników\n   - Maksymalnie 150-200 słów\n\n4. **CENY:**\n   - Zawsze podawaj ceny brutto\n   - Wskaż \"brutto zw\" jeśli VAT zwolniony\n   - Jeśli nie masz ceny - NIE wymyślaj, napisz \"Cena po uzgodnieniu\"\n\n---\n\n**SZABLON {{ $json.template_type }}:**\n\n{% if $json.template_type === 'new_inquiry' %}\n- Potwierdź dostępność artysty\n- Podaj cenę\n- Zapytaj czy przygotować szczegółową ofertę\n{% elif $json.template_type === 'follow_up' %}\n- Uprzejmie przypomnij o zapytaniu\n- Zapytaj czy są pytania\n{% elif $json.template_type === 'artist_unavailable' %}\n- Poinformuj o niedostępności\n- Zaproponuj alternatywy\n{% elif $json.template_type === 'missing_data' %}\n- Uprzejmie poproś o brakujące dane\n{% elif $json.template_type === 'formalnosci' %}\n- Krótkie potwierdzenie odbioru. NIE pytać o budżet. 2-3 zdania.\n{% elif $json.template_type === 'artist_response' %}\n- Podziękować, potwierdzić odbiór, wrócę z ustaleniami. NIE pytać o budżet.\n{% endif %}\n\n---\n\n**WYGENERUJ DRAFT W FORMACIE JSON:**\n\n```json\n{\n  \"draft_subject\": \"RE: Temat oryginalnego maila\",\n  \"draft_body\": \"Treść maila...\",\n  \"suggested_actions\": [\"Sprawdź rider techniczny\", \"Zadzwoń w razie pytań\"],\n  \"needs_review\": false,\n  \"review_reason\": null,\n  \"confidence\": 0.9\n}\n```"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1500
+        }
+      },
+      "name": "AI Response Generator",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json.message?.content || $input.first().json.content || '';\n\n// Parse JSON from response\nconst jsonMatch = response.match(/```json\\n([\\s\\S]*?)\\n```/);\nconst parsed = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(response);\n\nreturn {\n  json: parsed\n};"
+      },
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Response Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Response Generator": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "agent",
+      "id": "1"
+    }
+  ],
+  "pinData": {},
+  "versionId": "1"
+}
