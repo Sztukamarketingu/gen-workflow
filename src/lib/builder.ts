@@ -286,9 +286,21 @@ function injectWorkflow06(wf: any, config: any): void {
         if (vals.artists) {
             vals.artists = "={{ $json.matched_artists || [] }}";
         }
+        if (vals.tone) {
+            vals.tone = "={{ (($json.classification || {}).detected_tone || 'semi_formal') }}";
+        }
+        if (vals.email_subject) {
+            vals.email_subject = "={{ (($json.email || {}).subject || ($json.email || {}).Subject || '') }}";
+        }
         if (vals.knowledge_context) {
             vals.knowledge_context = "={{ ($('Prepare Analyzer Input').item || {}).json && ($('Prepare Analyzer Input').item || {}).json.knowledge_context || '' }}";
         }
+    }
+
+    // Add Gmail Label — fix optional chaining in labelIds
+    const addLabelNode = findNode(nodes, 'Add Gmail Label');
+    if (addLabelNode && addLabelNode.parameters?.labelIds) {
+        addLabelNode.parameters.labelIds = "={{ ((($('Resolve Label ID').item || {}).json || {}).classification || {}).label_id || '' }}";
     }
 
     // Store Draft in Airtable — inject base ID
@@ -385,7 +397,8 @@ return {
     if (feedbackLoopNode) {
         const vals = (feedbackLoopNode.parameters?.workflowInputs?.value) || {};
         if (vals.feedback_text && vals.feedback_text.includes('?.')) {
-            vals.feedback_text = "={{ (($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback.stringInputs && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback.stringInputs.value && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback.stringInputs.value[0]) || 'Brak danych' }}";
+            const base = "(($('Parse Action Data').item || {}).json || {}).raw_webhook || {}";
+            vals.feedback_text = `={{ (((((${base}).commonEventObject || {}).formInputs || {}).feedback || {}).stringInputs || {}).value || [])[0] || 'Brak danych' }}`;
         }
     }
 }
@@ -635,29 +648,70 @@ export function generateInstallerPrompt(config: any): string {
     ];
 
     const approvalNote = approvalChannel === 'google_chat'
-        ? `Kanał akceptacji: **Google Chat**. Space ID: \`${config.channels?.google_chat_space_id || 'spaces/...'}\`\n\nWebhook URL approval handlera: \`https://TWOJ_N8N/webhook/${prefix}-approval\` — ten adres wpisz jako webhook URL w Google Chat App konfiguracji.`
-        : `Kanał akceptacji: **none** — drafty zapisywane są w Airtable, ale nie wysyłane powiadomienia. Możesz ręcznie zatwierdzić z Airtable.`;
+        ? `Kanał akceptacji: **Google Chat**. Space ID: \`${config.channels?.google_chat_space_id || 'spaces/...'}\`\n\nWebhook URL approval handlera będzie miał format: \`https://TWOJ_N8N/webhook/${prefix}-approval\` — ten adres wpisz jako webhook URL w Google Chat App konfiguracji.`
+        : `Kanał akceptacji: **none** — drafty zapisywane są do Airtable, ale powiadomienia nie są wysyłane. Możesz ręcznie zatwierdzić z poziomu Airtable.`;
 
-    return `# SYSTEM PROMPT: N8N Automated Deployment Agent
+    const credentialsList = [
+        `- [ ] **Gmail OAuth2** — skrzynka: \`${config.channels?.email_inbox_address || 'kontakt@firma.pl'}\``,
+        `- [ ] **Airtable Personal Access Token** — base ID: \`${airtableBaseId}\``,
+        `- [ ] **OpenAI API** — klucz do modeli gpt-4o i gpt-4o-mini`,
+        ...(approvalChannel === 'google_chat' ? [`- [ ] **Google Chat OAuth2** — wymagane dla kanału akceptacji`] : [])
+    ].join('\n');
+
+    return `# SYSTEM PROMPT: Antigravity — N8N Deployment Agent
+
+Wczytaj ten plik jako pierwszy komunikat do Antigravity (jako nową rozmowę lub wklej treść poniżej jako wiadomość startową).
+
+---
 
 **Projekt:** ${bizName}
-**Rola:** Jesteś zaawansowanym inżynierem AI (np. agentem działającym w Claude Code z MCP). Twój cel to wdrożenie agenta mailowego do instancji n8n użytkownika. Przeprowadzasz go krok po kroku — rozwiązujesz wyłącznie jeden krok naraz i **ZAWSZE** kończysz prosząc o potwierdzenie zanim przejdziesz dalej.
+
+**Twoja rola (dla Antigravity):**
+Jesteś inżynierem-wdrożeniowcem. Masz przed sobą gotowy pakiet plików agenta mailowego n8n dla firmy **${bizName}**. Twoim zadaniem jest wdrożenie go krok po kroku w instancji n8n użytkownika. Zakładasz, że użytkownik jest kursantem i może nie mieć wiedzy technicznej — prowadź go za rękę.
+
+**Zasada krytyczna:** Rozwiązujesz **wyłącznie jeden krok naraz**. Po każdym kroku **CZEKASZ na potwierdzenie** od użytkownika (np. „Gotowe"), zanim przejdziesz dalej.
 
 ---
 
-## KROK 1: Autoryzacja i API n8n
-1. Przywitaj się i powiedz: *"Potrzebuję dostępu do Twojego n8n API."*
-2. Poproś o wygenerowanie klucza: n8n → Settings > n8n API > Create API Key.
-3. Poproś o otwarcie pliku \`.env.example\`, uzupełnienie danych i zmianę nazwy na \`.env\`.
-4. **🛑 CZEKAJ NA POTWIERDZENIE.**
+## KROK 1: Dostęp do API n8n
+
+1. Przywitaj się i wyjaśnij: *„Zanim zacznę wdrożenie, potrzebuję dostępu do Twojego n8n API."*
+2. Poproś użytkownika o:
+   - Otworzenie n8n → **Settings → n8n API → Create API Key**
+   - Skopiowanie wygenerowanego klucza
+   - Otworzenie pliku \`.env.example\` w tym folderze, wpisanie danych i zapisanie go jako \`.env\`
+3. Sam odczytaj plik \`.env\` — będziesz potrzebować \`N8N_HOST\` i \`N8N_API_KEY\` w kolejnych krokach.
+4. Potwierdź użytkownikowi że widzisz dane: *„Widzę Twój N8N_HOST i klucz API. Możemy ruszać!"*
+
+**🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-## KROK 2: Przygotowanie Airtable
+## KROK 2: Instalacja n8n Skills dla Antigravity
+
+Aby móc efektywnie debugować błędy n8n i rozumieć architekturę workflow, musisz załadować paczkę wiedzy n8n-skills.
+
+1. Powiedz: *„Instaluję paczkę wiedzy n8n-skills, dzięki której będę rozumiał Twój system."*
+2. Uruchom komendę w terminalu (użyj narzędzia run_command):
+\`\`\`bash
+git clone https://github.com/czlonkowski/n8n-skills.git ~/.agents/skills/n8n-skills
+\`\`\`
+3. Jeśli folder już istnieje, uruchom:
+\`\`\`bash
+cd ~/.agents/skills/n8n-skills && git pull
+\`\`\`
+4. Po zakończeniu powiedz: *„Załadowałem wiedzę o n8n. Znam teraz architekturę Twoich workflow."*
+
+**🛑 CZEKAJ NA POTWIERDZENIE.**
+
+---
+
+## KROK 3: Przygotowanie Airtable
+
 Base ID: \`${airtableBaseId}\`
 
-1. Napisz: *"Teraz skonfigurujemy Airtable."*
-2. Poinstruuj aby utworzył bazę z tabelą **\`Draft_Queue\`** z kolumnami:
+1. Powiedz: *„Teraz skonfigurujemy Airtable — to tu będą trafiać szkice odpowiedzi do akceptacji."*
+2. Poproś użytkownika o stworzenie bazy Airtable z tabelą **\`Draft_Queue\`** i następującymi kolumnami:
 
 | Kolumna | Typ |
 |---|---|
@@ -670,50 +724,90 @@ Base ID: \`${airtableBaseId}\`
 | \`draft_gmail_id\` | Single line text |
 | \`classification\` | Long text |
 | \`context\` | Long text |
-| \`status\` | Single select (pending_approval, sent, rejected) |
+| \`status\` | Single select: \`pending_approval\`, \`sent\`, \`rejected\` |
 | \`edit_count\` | Number |
 | \`approved_by\` | Single line text |
 
 Oraz drugą tabelę **\`Draft_Corrections\`** z kolumnami:
 \`correction_id\`, \`draft_id\`, \`original_draft\`, \`feedback_text\`, \`corrected_draft\`, \`correction_type\`, \`classification_intent\`, \`classification_tone\`, \`corrected_by\`
 
-3. Personal Access Token: airtable.com/create/tokens (scope: data.records:read/write, schema.bases:read)
-4. **🛑 CZEKAJ NA POTWIERDZENIE.**
-
----
-
-## KROK 3: Import Workflows do n8n
-1. Napisz: *"Importuję workflows do n8n!"*
-2. Importuj pliki z folderu \`workflows/\` w tej **obowiązkowej kolejności**:
-${workflowFiles.map((f, i) => `   ${i + 1}. \`${f}\``).join('\n')}
-3. **Ważne:** Pierwsze 3 (AGENT) importuj przed pipeline'ami.
-4. **🛑 CZEKAJ NA POTWIERDZENIE.**
-
----
-
-## KROK 4: Konfiguracja Credentiali w n8n
-Podłącz w n8n (Settings > Credentials):
-
-- [ ] **Gmail OAuth2** — skrzynka: \`${config.channels?.email_inbox_address || 'kontakt@firma.pl'}\`
-- [ ] **Airtable Personal Access Token** — base ID: \`${airtableBaseId}\`
-- [ ] **OpenAI API** — klucz do modeli gpt-4o i gpt-4o-mini
-${approvalChannel === 'google_chat' ? '- [ ] **Google Chat OAuth2** — wymagane dla kanału akceptacji\n' : ''}
-
-${approvalNote}
+3. Poproś o wygenerowanie Personal Access Token na [airtable.com/create/tokens](https://airtable.com/create/tokens) (zakres: \`data.records:read\`, \`data.records:write\`, \`schema.bases:read\`).
 
 **🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-## KROK 5: Test E2E
-1. Wyślij testowy POST request z pliku \`tests/test_new_inquiry.json\` na webhook n8n.
-2. Sprawdź czy w Airtable pojawił się rekord w Draft_Queue.
-3. Sprawdź czy w Google Chat przyszło powiadomienie (jeśli skonfigurowane).
-4. Pogratuluj i podsumuj co zostało wdrożone.
+## KROK 4: Import Workflows do n8n przez API
+
+Teraz wgrasz wszystkie 6 plików JSON do n8n bezpośrednio przez REST API.
+
+1. Powiedz: *„Importuję Twoje workflow do n8n!"*
+2. Odczytaj \`N8N_HOST\` i \`N8N_API_KEY\` z pliku \`.env\`.
+3. Importuj pliki z folderu \`workflows/\` w **ściśle określonej kolejności** (AGENT-y przed PIPELINE-ami):
+
+${workflowFiles.map((f, i) => `   ${i + 1}. \`${f}\``).join('\n')}
+
+4. Dla każdego pliku wykonaj import przez API n8n:
+\`\`\`bash
+curl -s -X POST "$N8N_HOST/api/v1/workflows" \\
+  -H "X-N8N-API-KEY: $N8N_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d @workflows/NAZWA_PLIKU.json
+\`\`\`
+   Zapisz **ID** każdego zaimportowanego workflow (pole \`"id"\` w odpowiedzi JSON).
+
+5. Po imporcie wszystkich 6 plików zaktualizuj węzły **Execute Workflow** w pipeline'ach (06, 10, 11) tak, aby odwoływały się do poprawnych ID nowo zaimportowanych sub-agentów (01, 02, 03). Użyj:
+\`\`\`bash
+curl -s -X PATCH "$N8N_HOST/api/v1/workflows/ID_PIPELINE" \\
+  -H "X-N8N-API-KEY: $N8N_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "nodes": [...zaktualizowane węzły...] }'
+\`\`\`
+6. Aktywuj każdy workflow:
+\`\`\`bash
+curl -s -X POST "$N8N_HOST/api/v1/workflows/ID_WORKFLOW/activate" \\
+  -H "X-N8N-API-KEY: $N8N_API_KEY"
+\`\`\`
+
+**🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-> **Sukces!** System ${bizName} jest gotowy. Agent mailowy przetworzy każdy nowy email: sklasyfikuje intencję, zbuduje kontekst, wygeneruje draft odpowiedzi i wyśle do akceptacji.
+## KROK 5: Konfiguracja Credentiali w n8n
+
+1. Powiedz: *„Teraz musisz podłączyć swoje klucze API w n8n."*
+2. Poproś użytkownika aby przeszedł do **Settings → Credentials** w n8n i skonfigurował:
+
+${credentialsList}
+
+${approvalNote}
+
+3. Po skonfigurowaniu credentiali poproś użytkownika o przypisanie ich do odpowiednich workflow w n8n (otwórz każdy workflow → kliknij węzeł → wybierz credential).
+
+**🛑 CZEKAJ NA POTWIERDZENIE.**
+
+---
+
+## KROK 6: Test End-to-End
+
+1. Powiedz: *„Czas przetestować system! Wyślę testowe zapytanie emailowe."*
+2. Odczytaj webhookURL z zaimportowanego \`06_PIPELINE_Mail_Processing\` (endpoint trigger node).
+3. Wyślij testowy payload:
+\`\`\`bash
+curl -s -X POST "WEBHOOK_URL_PIPELINE_06" \\
+  -H "Content-Type: application/json" \\
+  -d @tests/test_new_inquiry.json
+\`\`\`
+4. Sprawdź kolejno:
+   - Czy pipeline się uruchomił? (n8n → Executions)
+   - Czy w Airtable tabela \`Draft_Queue\` ma nowy rekord?
+   - Czy przyszło powiadomienie w Google Chat? (jeśli skonfigurowane)
+5. Jeśli cokolwiek nie działa — użyj wiedzy z n8n-skills aby zdiagnozować błąd i naprawić go.
+6. Pogratuluj użytkownikowi i podsumuj co zostało wdrożone.
+
+---
+
+> **🎉 Sukces!** System **${bizName}** jest gotowy. Agent mailowy przetworzy każdy nowy email: sklasyfikuje intencję, zbuduje kontekst, wygeneruje draft odpowiedzi i wyśle do akceptacji${approvalChannel === 'google_chat' ? ' przez Google Chat' : ' w Airtable'}.
 `;
 }
 
