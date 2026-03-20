@@ -45,10 +45,6 @@ jobs:
       - name: Trigger redeploy on VPS (Hostinger)
         uses: hostinger/deploy-on-vps@v2
         with:
-          host: ${{ secrets.HOSTINGER_VPS_HOST }}
-          username: ${{ secrets.HOSTINGER_VPS_USER }}
-          password: ${{ secrets.HOSTINGER_VPS_PASS }}
-          script: |
-            cd /root/n8n-generator-web
-            docker pull ghcr.io/sztukamarketingu/gen-workflow:latest
-            docker compose up -d --force-recreate
+          api-key: ${{ secrets.HOSTINGER_API_KEY }}
+          virtual-machine: ${{ vars.HOSTINGER_VM_ID }}
+          project-name: n8n-generator-web
