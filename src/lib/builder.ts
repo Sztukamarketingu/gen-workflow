@@ -648,7 +648,7 @@ export function generateInstallerPrompt(config: any): string {
     ];
 
     const approvalNote = approvalChannel === 'google_chat'
-        ? `Kanał akceptacji: **Google Chat**. Space ID: \`${config.channels?.google_chat_space_id || 'spaces/...'}\`\n\nWebhook URL approval handlera będzie miał format: \`https://TWOJ_N8N/webhook/${prefix}-approval\` — ten adres wpisz jako webhook URL w Google Chat App konfiguracji.`
+        ? `Kanał akceptacji: **Google Chat**. Space ID: \`${config.channels?.google_chat_space_id || 'spaces/...'}\`\n\nWebhook URL approval handlera będzie miał format: \`https://TWOJ_N8N/webhook/${prefix}-approval\` — ten adres wpisz jako webhook URL in Google Chat App konfiguracji.`
         : `Kanał akceptacji: **none** — drafty zapisywane są do Airtable, ale powiadomienia nie są wysyłane. Możesz ręcznie zatwierdzić z poziomu Airtable.`;
 
     const credentialsList = [
@@ -687,7 +687,22 @@ Jesteś inżynierem-wdrożeniowcem. Masz przed sobą gotowy pakiet plików agent
 
 ---
 
-## KROK 2: Instalacja n8n Skills dla Antigravity
+## KROK 2: Uzbrojenie AI – Integracja Narzędzi MCP (Serwer n8n-mcp)
+
+Jako agent potrzebujesz "supermocy" bezpośredniej komunikacji z n8n.
+
+1. Powiedz: *„Będę potrzebował narzędzia MCP, które pozwoli mi bezpośrednio zarządzać Twoim n8n. Zainstalujmy je."*
+2. Poproś użytkownika o uruchomienie skryptu \`setup_agent_tools.sh\` w terminalu (lub zrób to sam, jeśli masz uprawnienia):
+\`\`\`bash
+bash setup_agent_tools.sh
+\`\`\`
+3. Wyjaśnij, że to zainstaluje serwer n8n-mcp i skonfiguruje narzędzia agenta.
+
+**🛑 CZEKAJ NA POTWIERDZENIE.**
+
+---
+
+## KROK 3: Ładowanie "n8n Skills" dla Antigravity
 
 Aby móc efektywnie debugować błędy n8n i rozumieć architekturę workflow, musisz załadować paczkę wiedzy n8n-skills.
 
@@ -706,7 +721,7 @@ cd ~/.agents/skills/n8n-skills && git pull
 
 ---
 
-## KROK 3: Przygotowanie Airtable
+## KROK 4: Przygotowanie Airtable
 
 Base ID: \`${airtableBaseId}\`
 
@@ -737,7 +752,7 @@ Oraz drugą tabelę **\`Draft_Corrections\`** z kolumnami:
 
 ---
 
-## KROK 4: Import Workflows do n8n przez API
+## KROK 5: Import Workflows do n8n przez API
 
 Teraz wgrasz wszystkie 6 plików JSON do n8n bezpośrednio przez REST API.
 
@@ -773,7 +788,7 @@ curl -s -X POST "$N8N_HOST/api/v1/workflows/ID_WORKFLOW/activate" \\
 
 ---
 
-## KROK 5: Konfiguracja Credentiali w n8n
+## KROK 6: Konfiguracja Credentiali w n8n
 
 1. Powiedz: *„Teraz musisz podłączyć swoje klucze API w n8n."*
 2. Poproś użytkownika aby przeszedł do **Settings → Credentials** w n8n i skonfigurował:
@@ -788,7 +803,7 @@ ${approvalNote}
 
 ---
 
-## KROK 6: Test End-to-End
+## KROK 7: Test End-to-End
 
 1. Powiedz: *„Czas przetestować system! Wyślę testowe zapytanie emailowe."*
 2. Odczytaj webhookURL z zaimportowanego \`06_PIPELINE_Mail_Processing\` (endpoint trigger node).
@@ -810,6 +825,7 @@ curl -s -X POST "WEBHOOK_URL_PIPELINE_06" \\
 > **🎉 Sukces!** System **${bizName}** jest gotowy. Agent mailowy przetworzy każdy nowy email: sklasyfikuje intencję, zbuduje kontekst, wygeneruje draft odpowiedzi i wyśle do akceptacji${approvalChannel === 'google_chat' ? ' przez Google Chat' : ' w Airtable'}.
 `;
 }
+
 
 // ─── Test Payloads ────────────────────────────────────────────────────────────
 
@@ -930,6 +946,33 @@ ${(config.policy?.knowledge_base_entries || []).map((e: any) => `## ${e.topic ||
     };
 }
 
+// ─── Setup Script Generator ───────────────────────────────────────────────────
+
+export function generateSetupScript(config: any): string {
+    const bizName = config.business?.business_name || 'Agent N8N';
+    return `#!/bin/bash
+echo "Installing environment for: ${bizName}..."
+
+# 1. Install n8n MCP Server
+echo "Installing n8n MCP Server..."
+# Using npx to ensure we have the latest version of MCP server tools
+npx @modelcontextprotocol/create-server n8n-mcp
+
+# 2. Setup n8n-skills
+SKILLS_DIR="$HOME/.agents/skills/n8n-skills"
+if [ -d "$SKILLS_DIR" ]; then
+    echo "Updating n8n-skills..."
+    cd "$SKILLS_DIR" && git pull
+else
+    echo "Cloning n8n-skills..."
+    git clone https://github.com/czlonkowski/n8n-skills.git "$SKILLS_DIR"
+fi
+
+echo "Done! Environment is ready."
+`;
+}
+
+
 // ─── ZIP Builder ──────────────────────────────────────────────────────────────
 
 export async function downloadZip(config: any) {
@@ -957,6 +1000,7 @@ export async function downloadZip(config: any) {
     zip.file('agent_config.json', JSON.stringify(config, null, 2));
     zip.file('.env.example', generateEnvExample(config));
     zip.file('ai_installer_prompt.md', generateInstallerPrompt(config));
+    zip.file('setup_agent_tools.sh', generateSetupScript(config));
 
     const content = await zip.generateAsync({ type: 'blob' });
     const safeName = (config.business?.business_name || 'agent').replace(/\s+/g, '-').toLowerCase();

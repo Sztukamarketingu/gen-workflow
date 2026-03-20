@@ -131,6 +131,12 @@ function App() {
                 6x Skonfigurowane Workflow
               </li>
               <li className="flex items-center text-sm font-medium text-slate-700">
+                <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center mr-4">
+                  <Bot size={16} />
+                </div>
+                setup_agent_tools.sh – Skrypt instalacyjny MCP
+              </li>
+              <li className="flex items-center text-sm font-medium text-slate-700">
                 <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center mr-4">
                   <Mail size={16} />
                 </div>
