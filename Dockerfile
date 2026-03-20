@@ -7,6 +7,8 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+# Timestamp przerywa cache Dockera przy każdym buildzie
+RUN echo "Build: $(date -Iseconds)" > /tmp/build-info.txt
 RUN npm run build
 
 # Stage 2: Serve with nginx
