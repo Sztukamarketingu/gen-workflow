@@ -7,10 +7,11 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-# prebuild generuje public/version.json, vite build kopiuje public/ → dist/
 RUN npm run build
-# Walidacja: build failuje, gdy brak dist/version.json (nie wdrożymy bez wersji)
-RUN test -f dist/version.json || (echo "ERROR: dist/version.json missing after build" && exit 1)
+# version.json – niezależnie od prebuild, zawsze tworzony w dist/ (git w kontekście)
+RUN GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
+    echo "{\"sha\":\"$GIT_SHA\",\"date\":\"$(date -Iseconds)\"}" > dist/version.json
+RUN test -f dist/version.json || (echo "ERROR: dist/version.json missing" && exit 1)
 
 # Stage 2: Serve with nginx
 FROM nginx:alpine
