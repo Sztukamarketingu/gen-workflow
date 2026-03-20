@@ -1,6 +1,6 @@
 services:
   web:
-    build: .
+    image: ghcr.io/sztukamarketingu/gen-workflow:latest
     restart: unless-stopped
     labels:
       - traefik.enable=true
