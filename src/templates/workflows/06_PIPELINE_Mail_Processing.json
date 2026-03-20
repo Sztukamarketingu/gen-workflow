@@ -1,20 +1,10 @@
 {
-  "updatedAt": "2026-02-12T15:27:20.881Z",
-  "createdAt": "2026-02-10T21:43:23.635Z",
-  "id": "xPE7_v5KpOCvSTBSCFjxQ",
   "name": "[PIPELINE] Mail Processing",
-  "description": null,
-  "active": false,
-  "isArchived": false,
   "nodes": [
     {
       "parameters": {
         "pollTimes": {
-          "item": [
-            {
-              "mode": "everyMinute"
-            }
-          ]
+          "item": [{ "mode": "everyMinute" }]
         },
         "filters": {
           "q": "in:inbox -from:me -label:sent -label:draft"
@@ -23,16 +13,13 @@
       "name": "Gmail Trigger",
       "type": "n8n-nodes-base.gmailTrigger",
       "typeVersion": 1,
-      "position": [
-        -672,
-        160
-      ],
+      "position": [-672, 160],
       "webhookId": "gmail-webhook-impresariat",
       "id": "8849f8de-2b5f-4f56-a6f9-58c9c0ff53fc",
       "credentials": {
         "gmailOAuth2": {
-          "id": "HknwkUNiBxqqbjEh",
-          "name": "Gmail t.szwecki@impresariatkoncertowy.pl"
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
         }
       },
       "notes": "Webhook triggered on new emails in INBOX"
@@ -41,43 +28,31 @@
       "parameters": {
         "operation": "get",
         "messageId": "={{ $json.id }}",
-        "options": {
-          "format": "full"
-        }
+        "options": { "format": "full" }
       },
       "name": "Get Full Email",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2,
-      "position": [
-        -464,
-        160
-      ],
+      "position": [-464, 160],
       "id": "75108373-0379-4b1f-bfee-13a5575c05ca",
       "webhookId": "05750e6b-78e0-4a00-a0b7-74488a2ca3b2",
       "credentials": {
         "gmailOAuth2": {
-          "id": "HknwkUNiBxqqbjEh",
-          "name": "Gmail t.szwecki@impresariatkoncertowy.pl"
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
         }
       }
     },
     {
       "parameters": {
         "conditions": {
-          "boolean": [
-            {
-              "value1": "={{ $json.threadId }}"
-            }
-          ]
+          "boolean": [{ "value1": "={{ $json.threadId }}" }]
         }
       },
       "name": "IF Has Thread",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [
-        -240,
-        160
-      ],
+      "position": [-240, 160],
       "id": "a9b9e9bf-a093-4b78-8621-110693044748"
     },
     {
@@ -85,23 +60,18 @@
         "resource": "thread",
         "operation": "get",
         "threadId": "={{ $json.threadId }}",
-        "options": {
-          "format": "full"
-        }
+        "options": { "format": "full" }
       },
       "name": "Get Thread History",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2,
-      "position": [
-        -16,
-        48
-      ],
+      "position": [-16, 48],
       "id": "bdd605a3-f5e9-4193-ade3-9a6fc695d8d7",
       "webhookId": "575c5775-79dc-4172-baa3-c19277b9d747",
       "credentials": {
         "gmailOAuth2": {
-          "id": "HknwkUNiBxqqbjEh",
-          "name": "Gmail t.szwecki@impresariatkoncertowy.pl"
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
         }
       }
     },
@@ -114,10 +84,7 @@
       "name": "Merge Thread Data",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 2.1,
-      "position": [
-        208,
-        160
-      ],
+      "position": [208, 160],
       "id": "85346695-e970-465c-a669-9b02966b0479",
       "alwaysOutputData": true,
       "notesInFlow": true
@@ -129,12 +96,93 @@
       "name": "Load Knowledge",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        264,
-        352
-      ],
+      "position": [264, 352],
       "id": "load-knowledge",
       "notes": "KB z zasad odpowiedzi – wstrzyknięcie do Analyzer"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\n\nfunction decodeBase64Url(input) {\n  if (!input || typeof input !== 'string') return '';\n  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');\n  const pad = normalized.length % 4;\n  const padded = pad ? normalized + '='.repeat(4 - pad) : normalized;\n  try {\n    return Buffer.from(padded, 'base64').toString('utf8');\n  } catch {\n    return '';\n  }\n}\n\nfunction stripHtml(html) {\n  if (!html) return '';\n  return html\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction collectTextFromPayload(payload) {\n  if (!payload) return '';\n  if (payload.body && payload.body.data) {\n    const mime = (payload.mimeType || '').toLowerCase();\n    const text = decodeBase64Url(payload.body.data);\n    if (mime.includes('text/plain')) return text;\n    if (mime.includes('text/html')) return stripHtml(text);\n  }\n  if (Array.isArray(payload.parts)) {\n    const plainParts = [];\n    const htmlParts = [];\n    for (const part of payload.parts) {\n      const text = collectTextFromPayload(part);\n      const mime = (part.mimeType || '').toLowerCase();\n      if (!text) continue;\n      if (mime.includes('text/plain')) plainParts.push(text);\n      else if (mime.includes('text/html')) htmlParts.push(text);\n      else plainParts.push(text);\n    }\n    if (plainParts.length) return plainParts.join('\\n');\n    if (htmlParts.length) return htmlParts.join('\\n');\n  }\n  return '';\n}\n\nfunction messageToText(msg) {\n  const textPlain = msg.textPlain || msg.text || '';\n  const textHtml = stripHtml(msg.textHtml || '');\n  const payloadText = collectTextFromPayload(msg.payload);\n  const snippet = msg.snippet || '';\n  return [textPlain, payloadText, textHtml, snippet]\n    .map((v) => (typeof v === 'string' ? v.trim() : ''))\n    .find((v) => v.length > 0) || '';\n}\n\nconst content = messageToText(item);\nconst senderEmail = item.from || item.From || '';\nconst subject = item.subject || item.Subject || '';\n\nlet threadHistory = '';\nif (Array.isArray(item.messages) && item.messages.length > 0) {\n  threadHistory = item.messages\n    .map((m, idx) => {\n      const from = m.from || m.From || '';\n      const subj = m.subject || m.Subject || '';\n      const body = messageToText(m);\n      return `Message ${idx + 1}\\nFrom: ${from}\\nSubject: ${subj}\\nBody:\\n${body}`;\n    })\n    .join('\\n\\n---\\n\\n')\n    .slice(0, 12000);\n}\n\nreturn {\n  json: {\n    ...item,\n    content,\n    sender_email: senderEmail,\n    subject,\n    thread_history: threadHistory,\n    knowledge_context: item.knowledge_context || '',\n  },\n};"
+      },
+      "name": "Prepare Analyzer Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 352],
+      "id": "prepare-analyzer-input"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ZASTĄP_ID_WORKFLOW_01_CLASSIFIER",
+          "mode": "list",
+          "cachedResultName": "[AGENT] Email Classifier"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content": "={{ $json.content || '' }}",
+            "sender_email": "={{ $json.sender_email || '' }}",
+            "subject": "={{ $json.subject || '' }}",
+            "knowledge_context": "={{ $json.knowledge_context || '' }}"
+          }
+        },
+        "mode": "each"
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [380, 352],
+      "id": "execute-email-classifier",
+      "name": "Execute Email Classifier"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      },
+      "name": "Merge Classifier and Prepare",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [520, 260],
+      "id": "merge-classifier-prepare"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ZASTĄP_ID_WORKFLOW_02_CONTEXT_BUILDER",
+          "mode": "list",
+          "cachedResultName": "[AGENT] Context Builder"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content": "={{ $json.content || '' }}",
+            "classification": "={{ $json.classification || {} }}",
+            "thread_history": "={{ $json.thread_history || '' }}",
+            "subject": "={{ $json.subject || '' }}",
+            "sender_email": "={{ $json.sender_email || '' }}",
+            "knowledge_context": "={{ $json.knowledge_context || '' }}"
+          }
+        },
+        "mode": "each"
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [680, 260],
+      "id": "execute-context-builder",
+      "name": "Execute Context Builder"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\nconst cls = item.classification || {};\nconst intent = String(cls.intent || '').toLowerCase();\nconst LABELS = { zapytanie_o_impreze:'Label_1164233469838029683', dostepnosc_artysty:'Label_2392364100075658386', wspolpraca_wykonawca:'Label_7987774113567348098', formalnosci:'Label_1927380376375892524', confirmation:'Label_1927380376375892524', follow_up:'Label_6056553363396268183', inne:'Label_2258360176253958758', new_inquiry:'Label_1164233469838029683', artist_response:'Label_7987774113567348098' };\nconst label_id = cls.label_id || LABELS[intent] || LABELS.inne || '';\nreturn { json: { ...item, classification: { ...cls, label_id } } };"
+      },
+      "name": "Resolve Label ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 352],
+      "id": "resolve-label-id",
+      "notes": "Mapowanie intent → label_id (KB)"
     },
     {
       "parameters": {
@@ -160,10 +208,7 @@
       "name": "IF Has Label ID",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        600,
-        160
-      ],
+      "position": [600, 160],
       "id": "if-has-label",
       "notes": "Pomiń Add Label gdy brak label_id"
     },
@@ -177,19 +222,26 @@
       "name": "Add Gmail Label",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2,
-      "position": [
-        656,
-        160
-      ],
+      "position": [656, 160],
       "id": "a1344224-e86b-4d94-9fb8-accf9ed6e137",
       "webhookId": "142ad831-84e5-49a6-89ca-e12a757e0ac8",
       "credentials": {
         "gmailOAuth2": {
-          "id": "HknwkUNiBxqqbjEh",
-          "name": "Gmail t.szwecki@impresariatkoncertowy.pl"
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
         }
       },
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\nconst cls = item.classification || {};\nconst ctx = item.context || item;\nconst intent = String(cls.intent || '').toLowerCase();\nconst senderRole = String(cls.sender_role || '').toLowerCase();\nconst email = $('Get Full Email').item?.json || {};\nconst senderRaw = String(email.from || email.From || ctx.client_email || '').toLowerCase();\nconst subject = String(email.subject || email.Subject || '').toLowerCase();\nconst snippet = String(email.snippet || '').toLowerCase();\nconst prepContent = String($('Prepare Analyzer Input').item?.json?.content || '').toLowerCase();\nconst content = (prepContent || snippet);\nconst formalnosciKeywords = ['umowa', 'umowy', 'umow', 'skan', 'przesyłam', 'przesyła', 'prześlę', 'faktura', 'przelew', 'poczta', 'załącznik', 'przekaże', 'gotowa', 'gotowy', 'przesłana', 'przesłany', 'przesłane'];\nconst textToCheck = (content + ' ' + subject).toLowerCase();\nconst isFormalnosciByContent = formalnosciKeywords.some((kw) => textToCheck.includes(kw));\nconst nonBusinessPatterns = ['google cloud','cloudplatform-noreply','noreply','no-reply','security best practices','action advised','my console','account alert','policy update'];\nconst isSystemLike = nonBusinessPatterns.some((p) => senderRaw.includes(p) || subject.includes(p) || snippet.includes(p));\nlet route_intent = 'new_inquiry';\nif (isSystemLike || senderRole === 'other' || intent === 'other') {\n  route_intent = 'ignore';\n} else if (isFormalnosciByContent) {\n  route_intent = 'formalnosci';\n} else if (senderRole === 'artist') {\n  route_intent = 'artist_response';\n} else if (['follow_up', 'followup', 'reply', 'response', 'confirmation'].includes(intent)) {\n  route_intent = 'follow_up';\n} else if (['artist_response', 'availability_response', 'availability_confirmation'].includes(intent)) {\n  route_intent = 'artist_response';\n} else if (['new_inquiry', 'inquiry', 'booking_request'].includes(intent)) {\n  route_intent = 'new_inquiry';\n} else if (['formalnosci', 'confirmation', 'formalności'].includes(intent)) {\n  route_intent = 'formalnosci';\n}\nconst LABELS = { formalnosci:'Label_1927380376375892524', confirmation:'Label_1927380376375892524', new_inquiry:'Label_1164233469838029683', follow_up:'Label_6056553363396268183', artist_response:'Label_7987774113567348098', inne:'Label_2258360176253958758' };\nconst label_id = item.classification?.label_id || LABELS[route_intent] || '';\nreturn {\n  json: {\n    ...item,\n    classification: { ...item.classification, label_id },\n    route_intent,\n    route_reason: isFormalnosciByContent ? 'content_keywords_formalnosci' : (isSystemLike ? 'system_or_non_business' : 'intent_based'),\n  },\n};"
+      },
+      "name": "Normalize Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 160],
+      "id": "normalize-intent"
     },
     {
       "parameters": {
@@ -197,68 +249,48 @@
           "values": [
             {
               "conditions": {
-                "string": [
-                  {
-                    "value1": "={{ $json.route_intent }}",
-                    "operation": "equals",
-                    "value2": "new_inquiry"
-                  }
-                ]
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "id": "cond_0", "leftValue": "={{ $json.route_intent }}", "rightValue": "new_inquiry", "operator": { "type": "string", "operation": "equals", "singleValue": true } }],
+                "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "new_inquiry"
             },
             {
               "conditions": {
-                "string": [
-                  {
-                    "value1": "={{ $json.route_intent }}",
-                    "operation": "equals",
-                    "value2": "follow_up"
-                  }
-                ]
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "id": "cond_1", "leftValue": "={{ $json.route_intent }}", "rightValue": "follow_up", "operator": { "type": "string", "operation": "equals", "singleValue": true } }],
+                "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "follow_up"
             },
             {
               "conditions": {
-                "string": [
-                  {
-                    "value1": "={{ $json.route_intent }}",
-                    "operation": "equals",
-                    "value2": "artist_response"
-                  }
-                ]
-              },
-              "renameOutput": true,
-              "outputKey": "artist_response"
-            },
-            {
-              "conditions": {
-                "string": [
-                  {
-                    "value1": "={{ $json.route_intent }}",
-                    "operation": "equals",
-                    "value2": "formalnosci"
-                  }
-                ]
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "id": "cond_2", "leftValue": "={{ $json.route_intent }}", "rightValue": "formalnosci", "operator": { "type": "string", "operation": "equals", "singleValue": true } }],
+                "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "formalnosci"
             },
             {
               "conditions": {
-                "string": [
-                  {
-                    "value1": "={{ $json.route_intent }}",
-                    "operation": "equals",
-                    "value2": "ignore"
-                  }
-                ]
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "id": "cond_3", "leftValue": "={{ $json.route_intent }}", "rightValue": "ignore", "operator": { "type": "string", "operation": "equals", "singleValue": true } }],
+                "combinator": "and"
               },
               "renameOutput": true,
               "outputKey": "ignore"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{ "id": "cond_4", "leftValue": "={{ $json.route_intent }}", "rightValue": "wspolpraca", "operator": { "type": "string", "operation": "equals", "singleValue": true } }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "wspolpraca"
             }
           ]
         },
@@ -267,85 +299,63 @@
       "name": "Mail Supervisor (Switch)",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3,
-      "position": [
-        864,
-        160
-      ],
+      "position": [864, 160],
       "id": "f0b9932b-b253-476a-88c5-910347497a40",
       "notes": "Route based on intent from Email Analyzer V2"
     },
     {
       "parameters": {
-        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\n\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\n\nconst email = {\n  ...baseEmail,\n  classification,\n};\n\nconst subject = baseEmail.subject || baseEmail.Subject || 'Twoje zapytanie';\n\nreturn {\n  json: {\n    email,\n    context,\n    classification,\n    response_guidance: analyzer.response_guidance || {},\n    route_intent: 'new_inquiry',\n    template_type: 'new_inquiry',\n    draft: { draft_subject: `RE: ${subject}` },\n  },\n};"
+        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\nconst email = { ...baseEmail, classification };\nconst subject = baseEmail.subject || baseEmail.Subject || 'Twoje zapytanie';\nreturn { json: { email, context, classification, response_guidance: analyzer.response_guidance || {}, route_intent: 'new_inquiry', template_type: 'new_inquiry', draft: { draft_subject: `RE: ${subject}` } } };"
       },
       "name": "HANDLER: New Inquiry",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1088,
-        -96
-      ],
-      "id": "5dfc4be9-538a-4511-98bc-ce4f75ddcc70",
-      "notes": "Handler for new inquiry emails - EXPAND THIS"
+      "position": [1088, -96],
+      "id": "5dfc4be9-538a-4511-98bc-ce4f75ddcc70"
     },
     {
       "parameters": {
-        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\n\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\n\nconst email = {\n  ...baseEmail,\n  classification,\n};\n\nconst subject = baseEmail.subject || baseEmail.Subject || 'Kontynuacja rozmowy';\n\nreturn {\n  json: {\n    response_guidance: analyzer.response_guidance || {},\n    email,\n    context,\n    classification,\n    route_intent: 'follow_up',\n    template_type: 'follow_up',\n    draft: { draft_subject: `RE: ${subject}` },\n  },\n};"
+        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\nconst email = { ...baseEmail, classification };\nconst subject = baseEmail.subject || baseEmail.Subject || 'Kontynuacja rozmowy';\nreturn { json: { response_guidance: analyzer.response_guidance || {}, email, context, classification, route_intent: 'follow_up', template_type: 'follow_up', draft: { draft_subject: `RE: ${subject}` } } };"
       },
       "name": "HANDLER: Follow-up",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1088,
-        80
-      ],
-      "id": "495d689b-b998-4f04-b892-d037acd170ba",
-      "notes": "Handler for follow-up emails - EXPAND THIS"
+      "position": [1088, 80],
+      "id": "495d689b-b998-4f04-b892-d037acd170ba"
     },
     {
       "parameters": {
-        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\n\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\n\nconst email = {\n  ...baseEmail,\n  classification,\n};\n\nconst subject = baseEmail.subject || baseEmail.Subject || 'Odpowiedź artysty';\n\nreturn {\n  json: {\n    response_guidance: analyzer.response_guidance || {},\n    email,\n    context,\n    classification,\n    route_intent: 'artist_response',\n    template_type: 'artist_response',\n    draft: { draft_subject: `RE: ${subject}` },\n  },\n};"
+        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\nconst email = { ...baseEmail, classification };\nconst subject = baseEmail.subject || baseEmail.Subject || 'Odpowiedź artysty';\nreturn { json: { response_guidance: analyzer.response_guidance || {}, email, context, classification, route_intent: 'artist_response', template_type: 'artist_response', draft: { draft_subject: `RE: ${subject}` } } };"
       },
       "name": "HANDLER: Artist Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1088,
-        256
-      ],
-      "id": "329395a0-1e78-4903-aeb3-ed8eb1ea5cc6",
-      "notes": "Handler for artist responses - EXPAND THIS"
+      "position": [1088, 256],
+      "id": "329395a0-1e78-4903-aeb3-ed8eb1ea5cc6"
     },
     {
       "parameters": {
-        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\nconst email = { ...baseEmail, classification };\nconst subject = baseEmail.subject || baseEmail.Subject || 'Formalności';\nreturn {\n  json: {\n    response_guidance: analyzer.response_guidance || {},\n    email,\n    context,\n    classification,\n    route_intent: 'formalnosci',\n    template_type: 'formalnosci',\n    draft: { draft_subject: `RE: ${subject}` },\n  },\n};"
+        "jsCode": "const baseEmail = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\nconst classification = analyzer.classification || {};\nconst context = analyzer || {};\nconst email = { ...baseEmail, classification };\nconst subject = baseEmail.subject || baseEmail.Subject || 'Formalności';\nreturn { json: { response_guidance: analyzer.response_guidance || {}, email, context, classification, route_intent: 'formalnosci', template_type: 'formalnosci', draft: { draft_subject: `RE: ${subject}` } } };"
       },
       "name": "HANDLER: Formalnosci",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1088,
-        168
-      ],
-      "id": "handler-formalnosci",
-      "notes": "Umowy, faktury, przelewy – krótkie potwierdzenie"
+      "position": [1088, 168],
+      "id": "handler-formalnosci"
     },
     {
       "parameters": {},
       "name": "Merge Handler Outputs",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 2.1,
-      "position": [
-        1312,
-        160
-      ],
+      "position": [1312, 160],
       "id": "cca19947-b583-4689-8955-5842e391d183"
     },
     {
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "9N-AaPf-T5ZpWQ-HtEVzS",
+          "value": "ZASTĄP_ID_WORKFLOW_03_RESPONSE_GENERATOR",
           "mode": "list",
           "cachedResultName": "[AGENT] Response Generator"
         },
@@ -366,24 +376,28 @@
       "name": "Execute Response Generator",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
-      "position": [
-        1352,
-        320
-      ],
+      "position": [1352, 320],
       "id": "execute-response-gen"
     },
     {
       "parameters": {
-        "jsCode": "const handler = $('Merge Handler Outputs').item?.json || {};\nconst rg = $input.first().json || {};\nconst routeIntent = String(handler.route_intent || '').toLowerCase();\nconst isFormalnosci = routeIntent === 'formalnosci' || routeIntent === 'confirmation';\n\nlet subj = handler.draft?.draft_subject || ('RE: ' + (handler.email?.subject || handler.email?.Subject || ''));\nif (!isFormalnosci && rg.draft_subject) subj = rg.draft_subject;\n\nconst FORMALNOSCI_BODY = 'Dzień dobry,\\n\\nPotwierdzam odbiór wiadomości. Dziękuję.\\n\\nZ poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n\nlet body = rg.draft_body;\nif (isFormalnosci) {\n  body = FORMALNOSCI_BODY;\n} else if (!body) {\n  body = 'Dzień dobry,\\n\\nDziękuję za wiadomość. Wrócę z odpowiedzią.\\n\\nZ poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n}\n\nconst draft = { draft_subject: subj, draft_body: body };\nreturn { json: { ...handler, draft } };"
+        "jsCode": "const handler = $('Merge Handler Outputs').item?.json || {};\nconst rg = $input.first().json || {};\nconst routeIntent = String(handler.route_intent || '').toLowerCase();\nconst isFormalnosci = routeIntent === 'formalnosci' || routeIntent === 'confirmation';\nlet subj = handler.draft?.draft_subject || ('RE: ' + (handler.email?.subject || handler.email?.Subject || ''));\nif (!isFormalnosci && rg.draft_subject) subj = rg.draft_subject;\nconst FORMALNOSCI_BODY = 'Dzień dobry,\\n\\nPotwierdzam odbiór wiadomości. Dziękuję.\\n\\nZ poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\nlet body = rg.draft_body;\nif (isFormalnosci) {\n  body = FORMALNOSCI_BODY;\n} else if (!body) {\n  body = 'Dzień dobry,\\n\\nDziękuję za wiadomość. Wrócę z odpowiedzią.\\n\\nZ poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n}\nconst draft = { draft_subject: subj, draft_body: body };\nreturn { json: { ...handler, draft } };"
       },
       "name": "Prepare for Draft Auditor",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1572,
-        160
-      ],
+      "position": [1424, 160],
       "id": "prepare-for-draft"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json || {};\nconst draft = item.draft || {};\nconst cls = item.classification || {};\nconst routeIntent = String(item.route_intent || '').toLowerCase();\nconst senderRole = String(cls.sender_role || '').toLowerCase();\nlet subject = String(draft.draft_subject || '').trim();\nlet body = String(draft.draft_body || '')\n  .replace(/\\\\n/g, '\\n')\n  .replace(/\\r\\n/g, '\\n')\n  .trim();\nif (!subject) {\n  const sourceSubject = item.email?.subject || item.email?.Subject || item.subject || 'Wiadomość';\n  subject = `RE: ${sourceSubject}`;\n}\nif (!body) {\n  body = 'Dzień dobry,\\n\\nDziękuję za wiadomość. Wrócę z odpowiedzią najszybciej jak to możliwe.\\n\\nZ poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n}\nif (senderRole === 'artist' && routeIntent === 'artist_response') {\n  const lower = body.toLowerCase();\n  if (lower.includes('budżet') || lower.includes('lokalizacj') || lower.includes('preferowanych artyst') || lower.includes('termin')) {\n    body = 'Dzień dobry,\\n\\nDziękuję za potwierdzenie dostępności i przesłane informacje. Potwierdzam odbiór i wrócę z dalszymi ustaleniami.\\n\\nZ poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n  }\n}\nfunction escapeHtml(s) {\n  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\nconst draft_body_html = body\n  .split(/\\n\\n+/)\n  .map((p) => p.trim())\n  .filter(Boolean)\n  .map((p) => `<p>${escapeHtml(p)}</p>`)\n  .join('');\nreturn { json: { ...item, draft: { ...draft, draft_subject: subject, draft_body: body, draft_body_html }, audit: { formatted: true, route_intent: routeIntent } } };"
+      },
+      "name": "Draft Auditor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1572, 160],
+      "id": "draft-auditor"
     },
     {
       "parameters": {
@@ -397,16 +411,13 @@
       "name": "Create Gmail Draft",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2,
-      "position": [
-        1536,
-        160
-      ],
+      "position": [1720, 160],
       "id": "9eb48996-b2f5-42d5-91fc-a4c5f8ea8aec",
       "webhookId": "a2663d35-c6e9-455a-b116-eae395669289",
       "credentials": {
         "gmailOAuth2": {
-          "id": "HknwkUNiBxqqbjEh",
-          "name": "Gmail t.szwecki@impresariatkoncertowy.pl"
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
         }
       }
     },
@@ -422,8 +433,8 @@
             "email_thread_id": "={{ $('Get Full Email').item.json.threadId || \"\" }}",
             "email_from": "={{ $('Get Full Email').item.json.from || $('Get Full Email').item.json.From || \"\" }}",
             "email_subject": "={{ $('Get Full Email').item.json.subject || $('Get Full Email').item.json.Subject || \"\" }}",
-            "draft_subject": "={{ $('Draft Auditor').item.json.draft?.draft_subject || \"\" }}",
-            "draft_body": "={{ $('Draft Auditor').item.json.draft?.draft_body || \"\" }}",
+            "draft_subject": "={{ ($('Draft Auditor').item.json.draft || {}).draft_subject || \"\" }}",
+            "draft_body": "={{ ($('Draft Auditor').item.json.draft || {}).draft_body || \"\" }}",
             "draft_gmail_id": "={{ $('Create Gmail Draft').item.json.id || \"\" }}",
             "classification": "={{ JSON.stringify($('Execute Context Builder').item.json.classification || {}) }}",
             "context": "={{ JSON.stringify($('Execute Context Builder').item.json || {}) }}",
@@ -435,22 +446,17 @@
           "attemptToConvertTypes": false,
           "convertFieldsToString": true
         },
-        "options": {
-          "typecast": true
-        }
+        "options": { "typecast": true }
       },
       "name": "Store Draft in Airtable",
       "type": "n8n-nodes-base.airtable",
       "typeVersion": 2,
-      "position": [
-        1744,
-        160
-      ],
+      "position": [1900, 160],
       "id": "93c200b5-3a60-4803-bc08-22f3060cb604",
       "credentials": {
         "airtableTokenApi": {
-          "id": "aJDN5PJdRkGq3haz",
-          "name": "AT Impresariat"
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable Personal Access Token"
         }
       },
       "notes": "Save draft state for approval flow"
@@ -467,484 +473,127 @@
       "name": "Send Interactive Approval Card",
       "type": "n8n-nodes-base.googleChat",
       "typeVersion": 1,
-      "position": [
-        1968,
-        160
-      ],
+      "position": [1968, 160],
       "id": "0b39e1eb-a499-49dd-b8fe-d20ae6a0e742",
       "webhookId": "3b6f6edf-3d1d-4923-8706-b30b05a09470",
       "credentials": {
         "googleChatOAuth2Api": {
-          "id": "xVMb2rJKAwvaVQJd",
-          "name": "ImpresariatChat"
+          "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
+          "name": "Google Chat OAuth2"
         }
       },
-      "continueOnFail": true,
-      "notes": "Send interactive card with Approve/Edit/Reject buttons to Google Chat"
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "mode": "combine",
-        "combinationMode": "mergeByPosition"
-      },
-      "name": "Merge Classifier and Prepare",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 2.1,
-      "position": [
-        520,
-        260
-      ],
-      "id": "merge-classifier-prepare"
-    },
-    {
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "iGiyUdm9JnAEG2099R0Vv",
-          "mode": "list",
-          "cachedResultName": "[AGENT] Context Builder"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "content": "={{ $json.content || '' }}",
-            "classification": "={{ $json.classification || {} }}",
-            "thread_history": "={{ $json.thread_history || '' }}",
-            "subject": "={{ $json.subject || '' }}",
-            "sender_email": "={{ $json.sender_email || '' }}",
-            "knowledge_context": "={{ $json.knowledge_context || '' }}"
-          }
-        },
-        "mode": "each"
-      },
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.3,
-      "position": [
-        680,
-        260
-      ],
-      "id": "execute-context-builder",
-      "name": "Execute Context Builder"
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json || {};\nconst cls = item.classification || {};\nconst intent = String(cls.intent || '').toLowerCase();\nconst LABELS = { zapytanie_o_impreze:'Label_1164233469838029683', dostepnosc_artysty:'Label_2392364100075658386', wspolpraca_wykonawca:'Label_7987774113567348098', formalnosci:'Label_1927380376375892524', confirmation:'Label_1927380376375892524', follow_up:'Label_6056553363396268183', inne:'Label_2258360176253958758', new_inquiry:'Label_1164233469838029683', artist_response:'Label_7987774113567348098' };\nconst label_id = cls.label_id || LABELS[intent] || LABELS.inne || '';\nreturn { json: { ...item, classification: { ...cls, label_id } } };",
-        "position": [
-          840,
-          260
-        ]
-      },
-      "name": "Resolve Label ID",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        352
-      ],
-      "id": "resolve-label-id",
-      "notes": "Mapowanie intent → label_id (KB)"
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json || {};\n\nfunction decodeBase64Url(input) {\n  if (!input || typeof input !== 'string') return '';\n  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');\n  const pad = normalized.length % 4;\n  const padded = pad ? normalized + '='.repeat(4 - pad) : normalized;\n  try {\n    return Buffer.from(padded, 'base64').toString('utf8');\n  } catch {\n    return '';\n  }\n}\n\nfunction stripHtml(html) {\n  if (!html) return '';\n  return html\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction collectTextFromPayload(payload) {\n  if (!payload) return '';\n\n  if (payload.body && payload.body.data) {\n    const mime = (payload.mimeType || '').toLowerCase();\n    const text = decodeBase64Url(payload.body.data);\n    if (mime.includes('text/plain')) return text;\n    if (mime.includes('text/html')) return stripHtml(text);\n  }\n\n  if (Array.isArray(payload.parts)) {\n    const plainParts = [];\n    const htmlParts = [];\n\n    for (const part of payload.parts) {\n      const text = collectTextFromPayload(part);\n      const mime = (part.mimeType || '').toLowerCase();\n      if (!text) continue;\n      if (mime.includes('text/plain')) plainParts.push(text);\n      else if (mime.includes('text/html')) htmlParts.push(text);\n      else plainParts.push(text);\n    }\n\n    if (plainParts.length) return plainParts.join('\\n');\n    if (htmlParts.length) return htmlParts.join('\\n');\n  }\n\n  return '';\n}\n\nfunction messageToText(msg) {\n  const textPlain = msg.textPlain || msg.text || '';\n  const textHtml = stripHtml(msg.textHtml || '');\n  const payloadText = collectTextFromPayload(msg.payload);\n  const snippet = msg.snippet || '';\n\n  return [textPlain, payloadText, textHtml, snippet]\n    .map((v) => (typeof v === 'string' ? v.trim() : ''))\n    .find((v) => v.length > 0) || '';\n}\n\nconst content = messageToText(item);\nconst senderEmail = item.from || item.From || '';\nconst subject = item.subject || item.Subject || '';\n\nlet threadHistory = '';\nif (Array.isArray(item.messages) && item.messages.length > 0) {\n  threadHistory = item.messages\n    .map((m, idx) => {\n      const from = m.from || m.From || '';\n      const subj = m.subject || m.Subject || '';\n      const body = messageToText(m);\n      return `Message ${idx + 1}\\nFrom: ${from}\\nSubject: ${subj}\\nBody:\\n${body}`;\n    })\n    .join('\\n\\n---\\n\\n')\n    .slice(0, 12000);\n}\n\nreturn {\n  json: {\n    ...item,\n    content,\n    sender_email: senderEmail,\n    subject,\n    thread_history: threadHistory,\n    knowledge_context: item.knowledge_context || '',\n  },\n};"
-      },
-      "name": "Prepare Analyzer Input",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        320,
-        352
-      ],
-      "id": "prepare-analyzer-input"
-    },
-    {
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "f3W-UH-_4_1ItcKf3CD0f",
-          "mode": "list",
-          "cachedResultName": "[AGENT] Email Classifier"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "content": "={{ $json.content || '' }}",
-            "sender_email": "={{ $json.sender_email || '' }}",
-            "subject": "={{ $json.subject || '' }}",
-            "knowledge_context": "={{ $json.knowledge_context || '' }}"
-          }
-        },
-        "mode": "each"
-      },
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.3,
-      "position": [
-        380,
-        352
-      ],
-      "id": "execute-email-classifier",
-      "name": "Execute Email Classifier"
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json || {};\nconst cls = item.classification || {};\nconst ctx = item.context || item;\n\nconst intent = String(cls.intent || '').toLowerCase();\nconst senderRole = String(cls.sender_role || '').toLowerCase();\n\nconst email = $('Get Full Email').item?.json || {};\nconst senderRaw = String(email.from || email.From || ctx.client_email || '').toLowerCase();\nconst subject = String(email.subject || email.Subject || '').toLowerCase();\nconst snippet = String(email.snippet || '').toLowerCase();\nconst prepContent = String($('Prepare Analyzer Input').item?.json?.content || '').toLowerCase();\nconst content = (prepContent || snippet);\n\nconst formalnosciKeywords = ['umowa', 'umowy', 'umow', 'skan', 'przesyłam', 'przesyła', 'prześlę', 'faktura', 'przelew', 'poczta', 'załącznik', 'przekaże', 'gotowa', 'gotowy', 'przesłana', 'przesłany', 'przesłane'];\nconst textToCheck = (content + ' ' + subject).toLowerCase();\nconst isFormalnosciByContent = formalnosciKeywords.some((kw) => textToCheck.includes(kw));\n\nconst nonBusinessPatterns = [\n  'google cloud',\n  'cloudplatform-noreply',\n  'noreply',\n  'no-reply',\n  'security best practices',\n  'action advised',\n  'my console',\n  'account alert',\n  'policy update',\n];\n\nconst isSystemLike = nonBusinessPatterns.some((p) =>\n  senderRaw.includes(p) || subject.includes(p) || snippet.includes(p)\n);\n\nlet route_intent = 'new_inquiry';\n\nif (isSystemLike || senderRole === 'other' || intent === 'other') {\n  route_intent = 'ignore';\n} else if (isFormalnosciByContent) {\n  route_intent = 'formalnosci';\n} else if (senderRole === 'artist') {\n  route_intent = 'artist_response';\n} else if (['follow_up', 'followup', 'reply', 'response', 'confirmation'].includes(intent)) {\n  route_intent = 'follow_up';\n} else if (['artist_response', 'availability_response', 'availability_confirmation'].includes(intent)) {\n  route_intent = 'artist_response';\n} else if (['new_inquiry', 'inquiry', 'booking_request'].includes(intent)) {\n  route_intent = 'new_inquiry';\n} else if (['formalnosci', 'confirmation', 'formalności'].includes(intent)) {\n  route_intent = 'formalnosci';\n}\n\nconst LABELS = { formalnosci:'Label_1927380376375892524', confirmation:'Label_1927380376375892524', new_inquiry:'Label_1164233469838029683', follow_up:'Label_6056553363396268183', artist_response:'Label_7987774113567348098', inne:'Label_2258360176253958758' };\nconst label_id = item.classification?.label_id || LABELS[route_intent] || '';\nreturn {\n  json: {\n    ...item,\n    classification: { ...item.classification, label_id },\n    route_intent,\n    route_reason: isFormalnosciByContent ? 'content_keywords_formalnosci' : (isSystemLike ? 'system_or_non_business' : 'intent_based'),\n  },\n};"
-      },
-      "name": "Normalize Intent",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        760,
-        160
-      ],
-      "id": "normalize-intent"
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first().json || {};\nconst draft = item.draft || {};\nconst cls = item.classification || {};\nconst routeIntent = String(item.route_intent || '').toLowerCase();\nconst senderRole = String(cls.sender_role || '').toLowerCase();\n\nlet subject = String(draft.draft_subject || '').trim();\nlet body = String(draft.draft_body || '')\n  .replace(/\\\\n/g, '\\n')\n  .replace(/\\r\\n/g, '\\n')\n  .trim();\n\nif (!subject) {\n  const sourceSubject = item.email?.subject || item.email?.Subject || item.subject || 'Wiadomość';\n  subject = `RE: ${sourceSubject}`;\n}\n\nif (!body) {\n  body =\n    'Dzień dobry,\\n\\n' +\n    'Dziękuję za wiadomość. Wrócę z odpowiedzią najszybciej jak to możliwe.\\n\\n' +\n    'Z poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n}\n\n// Guardrail: when artist confirms availability, avoid sending client-intake questions.\nif (senderRole === 'artist' && routeIntent === 'artist_response') {\n  const lower = body.toLowerCase();\n  if (\n    lower.includes('budżet') ||\n    lower.includes('lokalizacj') ||\n    lower.includes('preferowanych artyst') ||\n    lower.includes('termin')\n  ) {\n    body =\n      'Dzień dobry,\\n\\n' +\n      'Dziękuję za potwierdzenie dostępności i przesłane informacje. Potwierdzam odbiór i wrócę z dalszymi ustaleniami.\\n\\n' +\n      'Z poważaniem,\\nTomasz Szwecki\\nImpresariat Koncertowy';\n  }\n}\n\nfunction escapeHtml(s) {\n  return s\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;');\n}\n\nconst draft_body_html = body\n  .split(/\\n\\n+/)\n  .map((p) => p.trim())\n  .filter(Boolean)\n  .map((p) => `<p>${escapeHtml(p)}</p>`)\n  .join('');\n\nreturn {\n  json: {\n    ...item,\n    draft: {\n      ...draft,\n      draft_subject: subject,\n      draft_body: body,\n      draft_body_html,\n    },\n    audit: {\n      formatted: true,\n      route_intent: routeIntent,\n    },\n  },\n};"
-      },
-      "name": "Draft Auditor",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1424,
-        160
-      ],
-      "id": "draft-auditor"
-    },
-    {
-      "parameters": {
-        "jsCode": "const email = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\n\nreturn {\n  json: {\n    ignored: true,\n    reason: 'non_business_or_system_message',\n    from: email.from || email.From || '',\n    subject: email.subject || email.Subject || '',\n    classification: analyzer.classification || {},\n  },\n};"
+        "jsCode": "const email = $('Get Full Email').item?.json || {};\nconst analyzer = $('Execute Context Builder').item?.json || {};\nreturn { json: { ignored: true, reason: 'non_business_or_system_message', from: email.from || email.From || '', subject: email.subject || email.Subject || '', classification: analyzer.classification || {} } };"
       },
       "name": "IGNORE: Non-Business",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1000,
-        480
-      ],
+      "position": [1000, 480],
       "id": "ignore-non-business"
     }
   ],
   "connections": {
     "Gmail Trigger": {
-      "main": [
-        [
-          {
-            "node": "Get Full Email",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Get Full Email", "type": "main", "index": 0 }]]
     },
     "Get Full Email": {
       "main": [
-        [
-          {
-            "node": "IF Has Thread",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Merge Thread Data",
-            "type": "main",
-            "index": 1
-          }
-        ]
+        [{ "node": "IF Has Thread", "type": "main", "index": 0 }, { "node": "Merge Thread Data", "type": "main", "index": 1 }]
       ]
     },
     "IF Has Thread": {
       "main": [
-        [
-          {
-            "node": "Get Thread History",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Load Knowledge",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Get Thread History", "type": "main", "index": 0 }],
+        [{ "node": "Load Knowledge", "type": "main", "index": 0 }]
       ]
     },
     "Get Thread History": {
-      "main": [
-        [
-          {
-            "node": "Merge Thread Data",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Add Gmail Label": {
-      "main": [
-        []
-      ]
-    },
-    "Mail Supervisor (Switch)": {
-      "main": [
-        [
-          {
-            "node": "HANDLER: New Inquiry",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "HANDLER: Follow-up",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "HANDLER: Artist Response",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "HANDLER: Formalnosci",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "IGNORE: Non-Business",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HANDLER: New Inquiry": {
-      "main": [
-        [
-          {
-            "node": "Merge Handler Outputs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HANDLER: Follow-up": {
-      "main": [
-        [
-          {
-            "node": "Merge Handler Outputs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HANDLER: Artist Response": {
-      "main": [
-        [
-          {
-            "node": "Merge Handler Outputs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HANDLER: Formalnosci": {
-      "main": [
-        [
-          {
-            "node": "Merge Handler Outputs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Merge Handler Outputs": {
-      "main": [
-        [
-          {
-            "node": "Execute Response Generator",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Execute Response Generator": {
-      "main": [
-        [
-          {
-            "node": "Prepare for Draft Auditor",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare for Draft Auditor": {
-      "main": [
-        [
-          {
-            "node": "Draft Auditor",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Create Gmail Draft": {
-      "main": [
-        [
-          {
-            "node": "Store Draft in Airtable",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Store Draft in Airtable": {
-      "main": [
-        [
-          {
-            "node": "Send Interactive Approval Card",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Merge Thread Data", "type": "main", "index": 0 }]]
     },
     "Merge Thread Data": {
+      "main": [[{ "node": "Load Knowledge", "type": "main", "index": 0 }]]
+    },
+    "Load Knowledge": {
+      "main": [[{ "node": "Prepare Analyzer Input", "type": "main", "index": 0 }]]
+    },
+    "Prepare Analyzer Input": {
       "main": [
         [
-          {
-            "node": "Load Knowledge",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "Execute Email Classifier", "type": "main", "index": 0 },
+          { "node": "Merge Classifier and Prepare", "type": "main", "index": 1 }
         ]
       ]
     },
-    "Load Knowledge": {
-      "main": [
-        [
-          {
-            "node": "Prepare Analyzer Input",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Execute Email Classifier": {
+      "main": [[{ "node": "Merge Classifier and Prepare", "type": "main", "index": 0 }]]
+    },
+    "Merge Classifier and Prepare": {
+      "main": [[{ "node": "Execute Context Builder", "type": "main", "index": 0 }]]
+    },
+    "Execute Context Builder": {
+      "main": [[{ "node": "Resolve Label ID", "type": "main", "index": 0 }]]
     },
     "Resolve Label ID": {
       "main": [
         [
-          {
-            "node": "IF Has Label ID",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Normalize Intent",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "IF Has Label ID", "type": "main", "index": 0 },
+          { "node": "Normalize Intent", "type": "main", "index": 0 }
         ]
       ]
     },
     "IF Has Label ID": {
       "main": [
-        [
-          {
-            "node": "Add Gmail Label",
-            "type": "main",
-            "index": 0
-          }
-        ],
+        [{ "node": "Add Gmail Label", "type": "main", "index": 0 }],
         []
       ]
     },
-    "Prepare Analyzer Input": {
-      "main": [
-        [
-          {
-            "node": "Execute Email Classifier",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Merge Classifier and Prepare",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
+    "Add Gmail Label": {
+      "main": [[]]
     },
     "Normalize Intent": {
+      "main": [[{ "node": "Mail Supervisor (Switch)", "type": "main", "index": 0 }]]
+    },
+    "Mail Supervisor (Switch)": {
       "main": [
-        [
-          {
-            "node": "Mail Supervisor (Switch)",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "HANDLER: New Inquiry", "type": "main", "index": 0 }],
+        [{ "node": "HANDLER: Follow-up", "type": "main", "index": 0 }],
+        [{ "node": "HANDLER: Artist Response", "type": "main", "index": 0 }],
+        [{ "node": "HANDLER: Formalnosci", "type": "main", "index": 0 }],
+        [{ "node": "IGNORE: Non-Business", "type": "main", "index": 0 }]
       ]
+    },
+    "HANDLER: New Inquiry": {
+      "main": [[{ "node": "Merge Handler Outputs", "type": "main", "index": 0 }]]
+    },
+    "HANDLER: Follow-up": {
+      "main": [[{ "node": "Merge Handler Outputs", "type": "main", "index": 0 }]]
+    },
+    "HANDLER: Artist Response": {
+      "main": [[{ "node": "Merge Handler Outputs", "type": "main", "index": 0 }]]
+    },
+    "HANDLER: Formalnosci": {
+      "main": [[{ "node": "Merge Handler Outputs", "type": "main", "index": 0 }]]
+    },
+    "Merge Handler Outputs": {
+      "main": [[{ "node": "Execute Response Generator", "type": "main", "index": 0 }]]
+    },
+    "Execute Response Generator": {
+      "main": [[{ "node": "Prepare for Draft Auditor", "type": "main", "index": 0 }]]
+    },
+    "Prepare for Draft Auditor": {
+      "main": [[{ "node": "Draft Auditor", "type": "main", "index": 0 }]]
     },
     "Draft Auditor": {
-      "main": [
-        [
-          {
-            "node": "Create Gmail Draft",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Create Gmail Draft", "type": "main", "index": 0 }]]
     },
-    "Execute Email Classifier": {
-      "main": [
-        [
-          {
-            "node": "Merge Classifier and Prepare",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Create Gmail Draft": {
+      "main": [[{ "node": "Store Draft in Airtable", "type": "main", "index": 0 }]]
     },
-    "Merge Classifier and Prepare": {
-      "main": [
-        [
-          {
-            "node": "Execute Context Builder",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Execute Context Builder": {
-      "main": [
-        [
-          {
-            "node": "Resolve Label ID",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Store Draft in Airtable": {
+      "main": [[{ "node": "Send Interactive Approval Card", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
@@ -952,81 +601,6 @@
     "availableInMCP": false,
     "callerPolicy": "workflowsFromSameOwner"
   },
-  "staticData": null,
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
-  "pinData": {},
-  "versionId": "1276d472-d093-4dce-867b-ad1f2dcd63a6",
-  "activeVersionId": null,
-  "versionCounter": 111,
-  "triggerCount": 0,
-  "shared": [
-    {
-      "updatedAt": "2026-02-10T21:43:23.643Z",
-      "createdAt": "2026-02-10T21:43:23.643Z",
-      "role": "workflow:owner",
-      "workflowId": "xPE7_v5KpOCvSTBSCFjxQ",
-      "projectId": "h1yJssUJ8tW7Ixcf",
-      "project": {
-        "updatedAt": "2025-12-04T20:46:31.452Z",
-        "createdAt": "2025-12-03T16:30:58.673Z",
-        "id": "h1yJssUJ8tW7Ixcf",
-        "name": "Tomasz Szwecki <kontakt@sztukamarketingu.pl>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "creatorId": "516979e4-8746-45b9-ae60-925b28b89f4f",
-        "projectRelations": [
-          {
-            "updatedAt": "2025-12-03T16:30:58.673Z",
-            "createdAt": "2025-12-03T16:30:58.673Z",
-            "userId": "516979e4-8746-45b9-ae60-925b28b89f4f",
-            "projectId": "h1yJssUJ8tW7Ixcf",
-            "user": {
-              "updatedAt": "2026-02-12T05:16:14.000Z",
-              "createdAt": "2025-12-03T16:30:58.076Z",
-              "id": "516979e4-8746-45b9-ae60-925b28b89f4f",
-              "email": "kontakt@sztukamarketingu.pl",
-              "firstName": "Tomasz",
-              "lastName": "Szwecki",
-              "personalizationAnswers": {
-                "version": "v4",
-                "personalization_survey_submitted_at": "2025-12-04T20:47:06.755Z",
-                "personalization_survey_n8n_version": "1.122.4",
-                "companySize": "<20",
-                "companyType": "education",
-                "automationGoalSm": [],
-                "role": "sales-and-marketing",
-                "reportedSource": "youtube"
-              },
-              "settings": {
-                "userActivated": true,
-                "firstSuccessfulWorkflowId": "p5uks107CJoEAUdGxDIQH",
-                "userActivatedAt": 1769271226090,
-                "easyAIWorkflowOnboarded": true,
-                "npsSurvey": {
-                  "responded": true,
-                  "lastShownAt": 1769780139401
-                }
-              },
-              "disabled": false,
-              "mfaEnabled": false,
-              "lastActiveAt": "2026-02-12",
-              "isPending": false
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "tags": [
-    {
-      "updatedAt": "2026-02-01T20:30:34.666Z",
-      "createdAt": "2026-02-01T20:30:34.666Z",
-      "id": "YjyzgWz9paOyp697",
-      "name": "pipeline"
-    }
-  ],
-  "activeVersion": null
+  "tags": [{ "name": "pipeline", "id": "1" }],
+  "pinData": {}
 }

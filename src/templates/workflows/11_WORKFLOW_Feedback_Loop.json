@@ -5,34 +5,16 @@
       "parameters": {
         "workflowInputs": {
           "schema": [
-            {
-              "name": "draft_id",
-              "type": "string",
-              "displayName": "Draft ID",
-              "required": true
-            },
-            {
-              "name": "feedback_text",
-              "type": "string",
-              "displayName": "Feedback Text",
-              "required": true
-            },
-            {
-              "name": "corrected_by",
-              "type": "string",
-              "displayName": "Corrected By (email)",
-              "required": true
-            }
+            { "name": "draft_id", "type": "string", "displayName": "Draft ID", "required": true },
+            { "name": "feedback_text", "type": "string", "displayName": "Feedback Text", "required": true },
+            { "name": "corrected_by", "type": "string", "displayName": "Corrected By (email)", "required": true }
           ]
         }
       },
       "name": "Execute Workflow Trigger",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
-      "position": [
-        240,
-        300
-      ]
+      "position": [240, 300]
     },
     {
       "parameters": {
@@ -47,17 +29,13 @@
       "name": "Get Original Draft",
       "type": "n8n-nodes-base.airtable",
       "typeVersion": 2,
-      "position": [
-        460,
-        300
-      ],
+      "position": [460, 300],
       "credentials": {
         "airtableTokenApi": {
           "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
           "name": "Airtable Personal Access Token"
         }
-      },
-      "notes": "Fetch original draft from Airtable"
+      }
     },
     {
       "parameters": {
@@ -68,11 +46,11 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "template_type": "={{ JSON.parse($json.classification).intent }}",
-            "context": "={{ $json.context }}",
-            "tone": "={{ JSON.parse($json.classification).detected_tone }}",
-            "previous_draft": "={{ $json.draft_body }}",
-            "correction_feedback": "={{ $json.feedback_text }}"
+            "template_type": "={{ JSON.parse($('Get Original Draft').item.json.classification || '{}').intent || '' }}",
+            "context": "={{ $('Get Original Draft').item.json.context }}",
+            "tone": "={{ JSON.parse($('Get Original Draft').item.json.classification || '{}').detected_tone || '' }}",
+            "previous_draft": "={{ $('Get Original Draft').item.json.draft_body }}",
+            "correction_feedback": "={{ $('Execute Workflow Trigger').item.json.feedback_text }}"
           }
         },
         "mode": "each"
@@ -80,62 +58,46 @@
       "name": "Regenerate with Feedback",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
-      "position": [
-        680,
-        300
-      ],
-      "notes": "Call Response Generator with feedback"
+      "position": [680, 300]
     },
     {
       "parameters": {
         "resource": "draft",
         "operation": "delete",
-        "draftId": "={{ $json.draft_gmail_id }}",
-        "options": {
-          "continueOnFail": true
-        }
+        "draftId": "={{ $('Get Original Draft').item.json.draft_gmail_id }}",
+        "options": { "continueOnFail": true }
       },
       "name": "Delete Old Gmail Draft",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
-      "position": [
-        900,
-        300
-      ],
+      "position": [900, 300],
       "credentials": {
         "gmailOAuth2": {
           "id": "YOUR_GMAIL_CREDENTIAL_ID",
           "name": "Gmail OAuth2"
         }
-      },
-      "notes": "Delete old draft to avoid duplicates"
+      }
     },
     {
       "parameters": {
         "resource": "draft",
         "operation": "create",
-        "message": {
-          "to": "={{ $json.email_from }}",
-          "subject": "={{ $json.draft_subject || $json.email_subject }}",
-          "body": "={{ $json.draft_body }}",
-          "threadId": "={{ $json.email_thread_id }}"
-        },
-        "options": {}
+        "subject": "={{ $('Get Original Draft').item.json.draft_subject || $('Get Original Draft').item.json.email_subject }}",
+        "message": "={{ $('Regenerate with Feedback').item.json.draft_body }}",
+        "options": {
+          "sendTo": "={{ $('Get Original Draft').item.json.email_from }}"
+        }
       },
       "name": "Create New Gmail Draft",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.1,
-      "position": [
-        1120,
-        300
-      ],
+      "position": [1120, 300],
       "credentials": {
         "gmailOAuth2": {
           "id": "YOUR_GMAIL_CREDENTIAL_ID",
           "name": "Gmail OAuth2"
         }
-      },
-      "notes": "Create updated draft in Gmail"
+      }
     },
     {
       "parameters": {
@@ -144,14 +106,14 @@
         "table": "Draft_Corrections",
         "fields": {
           "correction_id": "={{ $execution.id }}",
-          "draft_id": "={{ $json.draft_id }}",
-          "original_draft": "={{ $json.original_draft_body }}",
-          "feedback_text": "={{ $json.feedback_text }}",
-          "corrected_draft": "={{ $json.new_draft_body }}",
+          "draft_id": "={{ $('Get Original Draft').item.json.draft_id }}",
+          "original_draft": "={{ $('Get Original Draft').item.json.draft_body }}",
+          "feedback_text": "={{ $('Execute Workflow Trigger').item.json.feedback_text }}",
+          "corrected_draft": "={{ $('Regenerate with Feedback').item.json.draft_body }}",
           "correction_type": "manual",
-          "classification_intent": "={{ JSON.parse($json.classification).intent }}",
-          "classification_tone": "={{ JSON.parse($json.classification).detected_tone }}",
-          "corrected_by": "={{ $json.corrected_by }}",
+          "classification_intent": "={{ JSON.parse($('Get Original Draft').item.json.classification || '{}').intent || '' }}",
+          "classification_tone": "={{ JSON.parse($('Get Original Draft').item.json.classification || '{}').detected_tone || '' }}",
+          "corrected_by": "={{ $('Execute Workflow Trigger').item.json.corrected_by }}",
           "pattern_analyzed": false
         },
         "options": {}
@@ -159,28 +121,24 @@
       "name": "Save Correction to Airtable",
       "type": "n8n-nodes-base.airtable",
       "typeVersion": 2,
-      "position": [
-        1340,
-        300
-      ],
+      "position": [1340, 300],
       "credentials": {
         "airtableTokenApi": {
           "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
           "name": "Airtable Personal Access Token"
         }
-      },
-      "notes": "Store feedback for learning loop"
+      }
     },
     {
       "parameters": {
         "operation": "update",
         "base": "app5NIUbshNL31ylr",
         "table": "Draft_Queue",
-        "id": "={{ $json.airtable_record_id }}",
+        "id": "={{ $('Get Original Draft').item.json.id }}",
         "fields": {
-          "draft_body": "={{ $json.new_draft_body }}",
-          "draft_gmail_id": "={{ $json.new_draft_id }}",
-          "edit_count": "={{ $json.edit_count + 1 }}",
+          "draft_body": "={{ $('Regenerate with Feedback').item.json.draft_body }}",
+          "draft_gmail_id": "={{ $('Create New Gmail Draft').item.json.id }}",
+          "edit_count": "={{ ($('Get Original Draft').item.json.edit_count || 0) + 1 }}",
           "status": "pending_approval"
         },
         "options": {}
@@ -188,17 +146,13 @@
       "name": "Update Draft Queue",
       "type": "n8n-nodes-base.airtable",
       "typeVersion": 2,
-      "position": [
-        1560,
-        300
-      ],
+      "position": [1560, 300],
       "credentials": {
         "airtableTokenApi": {
           "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
           "name": "Airtable Personal Access Token"
         }
-      },
-      "notes": "Update draft state with new version"
+      }
     },
     {
       "parameters": {
@@ -208,118 +162,48 @@
         "nodeCredentialType": "googleChatOAuth2Api",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  text: '🔄 **DRAFT ZAKTUALIZOWANY**\\n\\nFeedback zastosowany: ' + $json.feedback_text + '\\n\\n📝 NOWY DRAFT:\\n---\\n' + $json.new_draft_body + '\\n---\\n\\nDraft ID: ' + $json.draft_id,\n  cardsV2: [{\n    cardId: 'approval-card-v2',\n    card: {\n      sections: [{\n        widgets: [{\n          buttonList: {\n            buttons: [\n              {\n                text: '✅ Approve & Send',\n                onClick: {\n                  action: {\n                    function: 'approve_draft',\n                    parameters: [{\n                      key: 'draft_id',\n                      value: $json.draft_id\n                    }]\n                  }\n                }\n              },\n              {\n                text: '✏️ Edit Again',\n                onClick: {\n                  action: {\n                    function: 'edit_draft',\n                    parameters: [{\n                      key: 'draft_id',\n                      value: $json.draft_id\n                    }]\n                  }\n                }\n              },\n              {\n                text: '❌ Reject',\n                onClick: {\n                  action: {\n                    function: 'reject_draft',\n                    parameters: [{\n                      key: 'draft_id',\n                      value: $json.draft_id\n                    }]\n                  }\n                }\n              }\n            ]\n          }\n        }]\n      }]\n    }\n  }]\n}) }}",
+        "jsonBody": "={{ JSON.stringify({\n  text: '🔄 **DRAFT ZAKTUALIZOWANY**\\n\\nFeedback zastosowany: ' + $('Execute Workflow Trigger').item.json.feedback_text + '\\n\\n📝 NOWY DRAFT:\\n---\\n' + $('Regenerate with Feedback').item.json.draft_body + '\\n---\\n\\nDraft ID: ' + $('Get Original Draft').item.json.draft_id,\n  cardsV2: [{\n    cardId: 'approval-card-v2',\n    card: {\n      sections: [{\n        widgets: [{\n          buttonList: {\n            buttons: [\n              { text: '✅ Approve & Send', onClick: { action: { function: 'approve_draft', parameters: [{ key: 'draft_id', value: $('Get Original Draft').item.json.draft_id }] } } },\n              { text: '✏️ Edit Again', onClick: { action: { function: 'edit_draft', parameters: [{ key: 'draft_id', value: $('Get Original Draft').item.json.draft_id }] } } },\n              { text: '❌ Reject', onClick: { action: { function: 'reject_draft', parameters: [{ key: 'draft_id', value: $('Get Original Draft').item.json.draft_id }] } } }\n            ]\n          }\n        }]\n      }]\n    }\n  }]\n}) }}",
         "options": {}
       },
       "name": "Send Updated Draft for Approval",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1780,
-        300
-      ],
+      "position": [1780, 300],
       "credentials": {
         "googleChatOAuth2Api": {
           "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
           "name": "Google Chat OAuth2"
         }
-      },
-      "notes": "Show updated draft with approval buttons"
+      }
     }
   ],
   "connections": {
     "Execute Workflow Trigger": {
-      "main": [
-        [
-          {
-            "node": "Get Original Draft",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Get Original Draft", "type": "main", "index": 0 }]]
     },
     "Get Original Draft": {
-      "main": [
-        [
-          {
-            "node": "Regenerate with Feedback",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Regenerate with Feedback", "type": "main", "index": 0 }]]
     },
     "Regenerate with Feedback": {
-      "main": [
-        [
-          {
-            "node": "Delete Old Gmail Draft",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Delete Old Gmail Draft", "type": "main", "index": 0 }]]
     },
     "Delete Old Gmail Draft": {
-      "main": [
-        [
-          {
-            "node": "Create New Gmail Draft",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Create New Gmail Draft", "type": "main", "index": 0 }]]
     },
     "Create New Gmail Draft": {
-      "main": [
-        [
-          {
-            "node": "Save Correction to Airtable",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Save Correction to Airtable", "type": "main", "index": 0 }]]
     },
     "Save Correction to Airtable": {
-      "main": [
-        [
-          {
-            "node": "Update Draft Queue",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Update Draft Queue", "type": "main", "index": 0 }]]
     },
     "Update Draft Queue": {
-      "main": [
-        [
-          {
-            "node": "Send Updated Draft for Approval",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Send Updated Draft for Approval", "type": "main", "index": 0 }]]
     }
   },
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "staticData": null,
+  "settings": { "executionOrder": "v1" },
   "tags": [
-    {
-      "name": "workflow",
-      "id": "5"
-    },
-    {
-      "name": "feedback",
-      "id": "6"
-    }
+    { "name": "workflow", "id": "5" },
+    { "name": "feedback", "id": "6" }
   ],
-  "pinData": {},
-  "versionId": "1"
+  "pinData": {}
 }

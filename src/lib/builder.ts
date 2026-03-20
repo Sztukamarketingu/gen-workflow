@@ -7,7 +7,6 @@ import workflow11 from '../templates/workflows/11_WORKFLOW_Feedback_Loop.json';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
-// Central map to access raw templates
 const templates: Record<string, any> = {
     '01_AGENT_Email_Classifier.json': workflow01,
     '02_AGENT_Context_Builder.json': workflow02,
@@ -17,7 +16,8 @@ const templates: Record<string, any> = {
     '11_WORKFLOW_Feedback_Loop.json': workflow11,
 };
 
-// 1. Config Builder
+// ─── Config Builder ───────────────────────────────────────────────────────────
+
 export function buildAgentConfig(formData: any) {
     return {
         business: formData.business_profile || {},
@@ -28,128 +28,602 @@ export function buildAgentConfig(formData: any) {
             label_id: (m.label_id || '').trim()
         })),
         policy: formData.knowledge_and_policy || {},
-        approval: formData.human_in_the_loop || {},
-        security: formData.security_and_compliance || {},
-        testing: formData.testing || {}
     };
 }
 
-// 2. Transformer
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function clone(obj: any): any {
+    return JSON.parse(JSON.stringify(obj));
+}
+
+function findNode(nodes: any[], name: string): any | undefined {
+    return nodes.find((n: any) => n.name === name);
+}
+
+function escapeBacktick(str: string): string {
+    return (str || '').replace(/`/g, "'").replace(/\\/g, '\\\\').replace(/\$/g, '\\$');
+}
+
+// ─── Knowledge Base String ────────────────────────────────────────────────────
+
+function buildKnowledgeBaseString(config: any): string {
+    const lines: string[] = [];
+
+    if (config.policy?.must_follow_rules) {
+        lines.push('ZASADY ODPOWIEDZI:');
+        lines.push(config.policy.must_follow_rules.trim());
+        lines.push('');
+    }
+
+    if (config.policy?.pricing_and_offer_policy) {
+        lines.push('OFERTA I CENNIK:');
+        lines.push(config.policy.pricing_and_offer_policy.trim());
+        lines.push('');
+    }
+
+    const forbidden = config.policy?.forbidden_phrases || [];
+    if (forbidden.length > 0) {
+        lines.push('ZWROTY ZAKAZANE (nie używaj ich w żadnej odpowiedzi):');
+        lines.push(forbidden.map((f: string) => `- ${f}`).join('\n'));
+        lines.push('');
+    }
+
+    const intents = config.intents || [];
+    if (intents.length > 0) {
+        lines.push('INTENCJE I ROUTING:');
+        intents.forEach((i: any) => {
+            const approval = i.requires_approval ? 'wymaga akceptacji' : 'bez akceptacji';
+            const reply = i.auto_reply_enabled ? 'odpowiada AI' : 'ignoruje';
+            lines.push(`- ${i.route_key}: ${i.description} [${reply}, ${approval}]`);
+        });
+        lines.push('');
+    }
+
+    const entries = config.policy?.knowledge_base_entries || [];
+    if (entries.length > 0) {
+        lines.push('=== BAZA WIEDZY (FAQ) ===');
+        entries.forEach((e: any) => {
+            if (e.topic) lines.push(`\n## ${e.topic}`);
+            if (e.content_markdown) lines.push(e.content_markdown.trim());
+        });
+    }
+
+    return lines.join('\n').trim();
+}
+
+// ─── Normalize Intent Code ────────────────────────────────────────────────────
+
+function buildNormalizeIntentCode(config: any): string {
+    const intents = config.intents || [];
+    const allRouteKeys = intents.map((i: any) => i.route_key);
+    const ignoreKeys = intents
+        .filter((i: any) => !i.auto_reply_enabled)
+        .map((i: any) => i.route_key);
+    const defaultIgnore = ignoreKeys[0] || 'ignore';
+    const defaultReply = intents.find((i: any) => i.auto_reply_enabled)?.route_key || 'new_inquiry';
+
+    const labelsObj: Record<string, string> = {};
+    (config.label_mapping || []).forEach((m: any) => {
+        if (m.intent && m.label_id) labelsObj[m.intent] = m.label_id;
+    });
+
+    return `const item = $input.first().json || {};
+const cls = item.classification || {};
+const intent = String(cls.intent || '').toLowerCase();
+const configuredIntents = ${JSON.stringify(allRouteKeys)};
+const ignoreKeys = ${JSON.stringify(ignoreKeys)};
+const defaultIgnore = ${JSON.stringify(defaultIgnore)};
+const defaultReply = ${JSON.stringify(defaultReply)};
+const LABELS = ${JSON.stringify(labelsObj)};
+
+const email = ($('Get Full Email').item || {}).json || {};
+const senderRaw = String(email.from || email.From || '').toLowerCase();
+const subject = String(email.subject || email.Subject || '').toLowerCase();
+const nonBusiness = ['noreply', 'no-reply', 'google cloud', 'cloudplatform', 'security-noreply', 'account-security', 'policy update'];
+const isSystem = nonBusiness.some(function(p) { return senderRaw.indexOf(p) !== -1 || subject.indexOf(p) !== -1; });
+
+let route_intent = defaultReply;
+if (isSystem) {
+  route_intent = defaultIgnore;
+} else if (configuredIntents.indexOf(intent) !== -1) {
+  route_intent = intent;
+} else if (intent === 'follow_up' || intent === 'followup' || intent === 'reply') {
+  route_intent = configuredIntents.indexOf('follow_up') !== -1 ? 'follow_up' : defaultReply;
+} else if (intent === 'formalnosci' || intent === 'confirmation') {
+  route_intent = configuredIntents.indexOf('formalnosci') !== -1 ? 'formalnosci' : defaultReply;
+} else if (ignoreKeys.indexOf(intent) !== -1) {
+  route_intent = intent;
+}
+
+const label_id = (item.classification || {}).label_id || LABELS[route_intent] || '';
+return {
+  json: Object.assign({}, item, {
+    classification: Object.assign({}, item.classification, { label_id: label_id }),
+    route_intent: route_intent,
+    route_reason: isSystem ? 'system_or_non_business' : 'intent_based'
+  })
+};`;
+}
+
+// ─── Switch Rules ─────────────────────────────────────────────────────────────
+
+function buildSwitchRules(config: any): any[] {
+    const intents = config.intents || [];
+    return intents.map((intent: any, index: number) => ({
+        conditions: {
+            options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+            conditions: [{
+                id: `cond_${index}`,
+                leftValue: '={{ $json.route_intent }}',
+                rightValue: intent.route_key,
+                operator: { type: 'string', operation: 'equals', singleValue: true }
+            }],
+            combinator: 'and'
+        },
+        renameOutput: true,
+        outputKey: intent.route_key
+    }));
+}
+
+// ─── Prepare for Draft Auditor code ──────────────────────────────────────────
+
+function buildPrepareForDraftAuditorCode(config: any): string {
+    const sig = escapeBacktick(config.business?.email_signature || 'Z poważaniem');
+    return `const handler = ($('Merge Handler Outputs').item || {}).json || {};
+const rg = $input.first().json || {};
+const routeIntent = String(handler.route_intent || '').toLowerCase();
+const isFormalnosci = routeIntent === 'formalnosci' || routeIntent === 'confirmation';
+let subj = handler.draft && handler.draft.draft_subject ? handler.draft.draft_subject : ('RE: ' + ((handler.email && (handler.email.subject || handler.email.Subject)) || ''));
+if (!isFormalnosci && rg.draft_subject) subj = rg.draft_subject;
+const SIGNATURE = \`${sig}\`;
+const FORMALNOSCI_BODY = 'Dzień dobry,\\n\\nPotwierdzam odbiór wiadomości. Dziękuję.\\n\\n' + SIGNATURE;
+let body = rg.draft_body;
+if (isFormalnosci) {
+  body = FORMALNOSCI_BODY;
+} else if (!body) {
+  body = 'Dzień dobry,\\n\\nDziękuję za wiadomość. Wrócę z odpowiedzią.\\n\\n' + SIGNATURE;
+}
+const draft = { draft_subject: subj, draft_body: body };
+return { json: Object.assign({}, handler, { draft: draft }) };`;
+}
+
+// ─── Draft Auditor code ───────────────────────────────────────────────────────
+
+function buildDraftAuditorCode(config: any): string {
+    const sig = escapeBacktick(config.business?.email_signature || 'Z poważaniem');
+    return `const item = $input.first().json || {};
+const draft = item.draft || {};
+const cls = item.classification || {};
+const routeIntent = String(item.route_intent || '').toLowerCase();
+let subject = String(draft.draft_subject || '').trim();
+let body = String(draft.draft_body || '').replace(/\\\\n/g, '\\n').replace(/\\r\\n/g, '\\n').trim();
+const SIGNATURE = \`${sig}\`;
+if (!subject) {
+  const src = (item.email && (item.email.subject || item.email.Subject)) || item.subject || 'Wiadomość';
+  subject = 'RE: ' + src;
+}
+if (!body) {
+  body = 'Dzień dobry,\\n\\nDziękuję za wiadomość. Wrócę z odpowiedzią najszybciej jak to możliwe.\\n\\n' + SIGNATURE;
+}
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+const draft_body_html = body.split(/\\n\\n+/).map(function(p) { return p.trim(); }).filter(Boolean).map(function(p) { return '<p>' + escHtml(p) + '</p>'; }).join('');
+return { json: Object.assign({}, item, { draft: Object.assign({}, draft, { draft_subject: subject, draft_body: body, draft_body_html: draft_body_html }), audit: { formatted: true, route_intent: routeIntent } }) };`;
+}
+
+// ─── Inject Workflow 06 ───────────────────────────────────────────────────────
+
+function injectWorkflow06(wf: any, config: any): void {
+    const nodes = wf.nodes;
+
+    // Load Knowledge — replace KB
+    const loadKnowledge = findNode(nodes, 'Load Knowledge');
+    if (loadKnowledge) {
+        const kb = escapeBacktick(buildKnowledgeBaseString(config));
+        loadKnowledge.parameters.jsCode = `const item = $input.first().json || {};\nconst KB = \`${kb}\`;\nreturn { json: Object.assign({}, item, { knowledge_context: KB }) };`;
+    }
+
+    // Resolve Label ID — inject label mapping
+    const resolveLabel = findNode(nodes, 'Resolve Label ID');
+    if (resolveLabel) {
+        const labelsObj: Record<string, string> = {};
+        (config.label_mapping || []).forEach((m: any) => {
+            if (m.intent && m.label_id) labelsObj[m.intent] = m.label_id;
+        });
+        resolveLabel.parameters.jsCode = `const item = $input.first().json || {};\nconst cls = item.classification || {};\nconst intent = String(cls.intent || '').toLowerCase();\nconst LABELS = ${JSON.stringify(labelsObj)};\nconst label_id = cls.label_id || LABELS[intent] || '';\nreturn { json: Object.assign({}, item, { classification: Object.assign({}, cls, { label_id: label_id }) }) };`;
+    }
+
+    // Normalize Intent — rebuild with user's intents
+    const normalizeIntent = findNode(nodes, 'Normalize Intent');
+    if (normalizeIntent) {
+        normalizeIntent.parameters.jsCode = buildNormalizeIntentCode(config);
+    }
+
+    // Mail Supervisor Switch — rebuild rules
+    const mailSupervisor = findNode(nodes, 'Mail Supervisor (Switch)');
+    if (mailSupervisor) {
+        if (!mailSupervisor.parameters) mailSupervisor.parameters = {};
+        mailSupervisor.parameters.rules = { values: buildSwitchRules(config) };
+    }
+
+    // Handlers — fix optional chaining
+    const handlerNodes = ['HANDLER: New Inquiry', 'HANDLER: Follow-up', 'HANDLER: Artist Response', 'HANDLER: Formalnosci'];
+    handlerNodes.forEach(name => {
+        const node = findNode(nodes, name);
+        if (node && node.parameters?.jsCode) {
+            node.parameters.jsCode = node.parameters.jsCode
+                .replace(/\$\('([^']+)'\)\.item\?\./g, "(\$('$1').item || {}).")
+                .replace(/\?\./g, ' && ');
+        }
+    });
+
+    // IGNORE: Non-Business — fix optional chaining
+    const ignoreNode = findNode(nodes, 'IGNORE: Non-Business');
+    if (ignoreNode && ignoreNode.parameters?.jsCode) {
+        ignoreNode.parameters.jsCode = ignoreNode.parameters.jsCode
+            .replace(/\$\('([^']+)'\)\.item\?\./g, "(\$('$1').item || {}).")
+            .replace(/\?\./g, ' && ');
+    }
+
+    // Prepare for Draft Auditor — inject signature, fix optional chaining
+    const prepareNode = findNode(nodes, 'Prepare for Draft Auditor');
+    if (prepareNode) {
+        prepareNode.parameters.jsCode = buildPrepareForDraftAuditorCode(config);
+    }
+
+    // Draft Auditor — inject signature
+    const auditorNode = findNode(nodes, 'Draft Auditor');
+    if (auditorNode) {
+        auditorNode.parameters.jsCode = buildDraftAuditorCode(config);
+    }
+
+    // Execute Response Generator — fix optional chaining in expressions
+    const execRespGen = findNode(nodes, 'Execute Response Generator');
+    if (execRespGen) {
+        const vals = (execRespGen.parameters?.workflowInputs?.value) || {};
+        if (vals.artists) {
+            vals.artists = "={{ $json.matched_artists || [] }}";
+        }
+        if (vals.knowledge_context) {
+            vals.knowledge_context = "={{ ($('Prepare Analyzer Input').item || {}).json && ($('Prepare Analyzer Input').item || {}).json.knowledge_context || '' }}";
+        }
+    }
+
+    // Store Draft in Airtable — inject base ID
+    const storeNode = findNode(nodes, 'Store Draft in Airtable');
+    if (storeNode) {
+        storeNode.parameters.base = config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX';
+    }
+
+    // Send Interactive Approval Card — inject space ID
+    const chatNode = findNode(nodes, 'Send Interactive Approval Card');
+    if (chatNode) {
+        const spaceId = config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID';
+        chatNode.parameters.spaceId = spaceId;
+    }
+
+    // IF Has Label ID — fix optional chaining in condition expression
+    const ifLabel = findNode(nodes, 'IF Has Label ID');
+    if (ifLabel) {
+        const conditions = (ifLabel.parameters?.conditions?.conditions) || [];
+        conditions.forEach((c: any) => {
+            if (c.leftValue && c.leftValue.includes('?.')) {
+                c.leftValue = "={{ ($json.classification || {}).label_id || '' }}";
+            }
+        });
+    }
+}
+
+// ─── Inject Workflow 10 ───────────────────────────────────────────────────────
+
+function injectWorkflow10(wf: any, config: any): void {
+    const nodes = wf.nodes;
+    const baseId = config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX';
+    const spaceId = config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID';
+    const prefix = (config.channels?.webhook_prefix || 'agent').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+
+    // Webhook path
+    const webhookNode = findNode(nodes, 'Google Chat Action Webhook');
+    if (webhookNode) {
+        webhookNode.parameters.path = `${prefix}-approval`;
+        webhookNode.webhookId = `${prefix}-approval-webhook`;
+    }
+
+    // Airtable base ID in all nodes
+    nodes.forEach((node: any) => {
+        if (node.type === 'n8n-nodes-base.airtable' && node.parameters?.base) {
+            node.parameters.base = baseId;
+        }
+    });
+
+    // APPROVE: Send Gmail — add HTML formatting
+    const sendGmail = findNode(nodes, 'APPROVE: Send Gmail');
+    if (sendGmail) {
+        sendGmail.parameters.message = "={{ ('<p>' + ($json.draft_body || '')).split('\\n\\n').join('</p><p>').split('\\n').join('<br>') + '</p>' }}";
+        if (!sendGmail.parameters.options) sendGmail.parameters.options = {};
+        sendGmail.parameters.options.bodyContentType = 'html';
+    }
+
+    // EDIT: Show Feedback Form — inject space URL
+    const editNode = findNode(nodes, 'EDIT: Show Feedback Form');
+    if (editNode) {
+        editNode.parameters.url = `https://chat.googleapis.com/v1/${spaceId}/messages`;
+    }
+
+    // Fix optional chaining in Parse Action Data
+    const parseNode = findNode(nodes, 'Parse Action Data');
+    if (parseNode && parseNode.parameters?.jsCode) {
+        parseNode.parameters.jsCode = parseNode.parameters.jsCode.replace(/\?\./g, ' && (') + ')';
+        // Use a cleaner replacement
+        parseNode.parameters.jsCode = `const webhook = $input.first().json;
+const action = (webhook.action && webhook.action.function) || (webhook.commonEventObject && webhook.commonEventObject.invokedFunction) || 'unknown';
+const params = (webhook.action && webhook.action.parameters) || (webhook.commonEventObject && webhook.commonEventObject.parameters) || [];
+let draft_id;
+if (Array.isArray(params)) {
+  const draftParam = params.find(function(p) { return p.key === 'draft_id'; });
+  draft_id = draftParam && draftParam.value;
+} else {
+  draft_id = params.draft_id;
+}
+const user_email = (webhook.user && webhook.user.email) || (webhook.user && webhook.user.name) || 'unknown';
+const user_name = (webhook.user && webhook.user.displayName) || (webhook.user && webhook.user.name) || 'Unknown User';
+return {
+  json: {
+    action: action.replace('_draft', ''),
+    draft_id: draft_id,
+    user_email: user_email,
+    user_name: user_name,
+    raw_webhook: webhook
+  }
+};`;
+    }
+
+    // Fix optional chaining in EDIT: Call Feedback Loop workflowInputs
+    const feedbackLoopNode = findNode(nodes, 'EDIT: Call Feedback Loop');
+    if (feedbackLoopNode) {
+        const vals = (feedbackLoopNode.parameters?.workflowInputs?.value) || {};
+        if (vals.feedback_text && vals.feedback_text.includes('?.')) {
+            vals.feedback_text = "={{ (($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback.stringInputs && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback.stringInputs.value && ($('Parse Action Data').item.json.raw_webhook || {}).commonEventObject.formInputs.feedback.stringInputs.value[0]) || 'Brak danych' }}";
+        }
+    }
+}
+
+// ─── Inject Workflow 11 ───────────────────────────────────────────────────────
+
+function injectWorkflow11(wf: any, config: any): void {
+    const nodes = wf.nodes;
+    const baseId = config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX';
+    const spaceId = config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID';
+
+    // Airtable base ID in all airtable nodes
+    nodes.forEach((node: any) => {
+        if (node.type === 'n8n-nodes-base.airtable' && node.parameters?.base) {
+            node.parameters.base = baseId;
+        }
+    });
+
+    // Send Updated Draft for Approval — inject space URL
+    const sendNode = findNode(nodes, 'Send Updated Draft for Approval');
+    if (sendNode) {
+        sendNode.parameters.url = `https://chat.googleapis.com/v1/${spaceId}/messages`;
+    }
+}
+
+// ─── AI Prompt Generators ─────────────────────────────────────────────────────
+
+function generateClassifierPrompt(config: any): string {
+    const bizName = config.business?.business_name || 'firma';
+    const intents = config.intents || [];
+    const intentLines = intents.map((i: any) => `- ${i.route_key} — ${i.description}`).join('\n');
+    const labelLines = (config.label_mapping || []).length > 0
+        ? '\n**LABEL_ID (Gmail — przypisz do intent):**\n' + config.label_mapping.map((m: any) => `- ${m.label_id} = ${m.intent}`).join('\n')
+        : '';
+
+    return `Analizuj TYLKO aktualną wiadomość (treść i temat). Klasyfikuj email dla firmy: ${bizName}.
+
+**INTENCJE — wybierz jedną:**
+${intentLines}
+
+**SENDER_ROLE:** client | partner | vendor | other
+**DETECTED_TONE:** formal | semi_formal | informal
+**CONVERSATION_STAGE:** initial | negotiation | closing | follow_up
+**URGENCY:** low | medium | high | urgent
+${labelLines}
+
+{{ $('Execute Workflow Trigger').first().json.knowledge_context ? '**ZASADY DO STOSOWANIA:**\\n' + $('Execute Workflow Trigger').first().json.knowledge_context + '\\n\\n' : '' }}
+
+**EMAIL:**
+Od: {{ $('Execute Workflow Trigger').first().json.sender_email }}
+Temat: {{ $('Execute Workflow Trigger').first().json.subject }}
+
+Treść:
+{{ $('Execute Workflow Trigger').first().json.content }}
+
+---
+
+Zwróć TYLKO JSON (bez dodatkowego tekstu):
+
+{
+  "intent": "${intents[0]?.route_key || 'new_inquiry'}",
+  "sender_role": "client",
+  "detected_tone": "semi_formal",
+  "conversation_stage": "initial",
+  "urgency": "medium",
+  "label_id": "",
+  "confidence": 0.9
+}`;
+}
+
+function generateContextBuilderPrompt(config: any): string {
+    const bizName = config.business?.business_name || 'firma';
+    const lang = config.business?.language_primary || 'pl';
+
+    return `SYSTEM: Jesteś ekspertem w analizie emaili dla firmy ${bizName}.
+Ekstrahuj dane, przygotuj podsumowanie i wygeneruj response_guidance — wytyczne jak odpowiadać.
+Odpowiadaj w języku: ${lang}.
+
+{{ $('Execute Workflow Trigger').first().json.knowledge_context ? '**ZASADY DO STOSOWANIA (BAZA WIEDZY):**\\n' + $('Execute Workflow Trigger').first().json.knowledge_context + '\\n\\n' : '' }}
+
+**INPUT:**
+Klasyfikacja: {{ JSON.stringify($('Execute Workflow Trigger').first().json.classification) }}
+
+Email:
+Od: {{ $('Execute Workflow Trigger').first().json.sender_email || '' }}
+Temat: {{ $('Execute Workflow Trigger').first().json.subject || '' }}
+
+Treść:
+{{ $('Execute Workflow Trigger').first().json.content }}
+
+{{ $('Execute Workflow Trigger').first().json.thread_history ? 'Historia wątku:\\n' + $('Execute Workflow Trigger').first().json.thread_history : '' }}
+
+---
+
+Zwróć JSON z polami:
+- summary: podsumowanie (2-3 zdania)
+- participants: [{email, name, role}]
+- key_information: {dates_mentioned[], questions_asked[], requirements[]}
+- client_name, client_email, client_phone
+- is_continuation: bool
+- missing_information: []
+- recommended_next_actions: []
+- response_guidance:
+    must_include: [] (co MUSI być w odpowiedzi)
+    should_avoid: [] (czego NIE pisać)
+    suggested_actions: [] (konkretne kroki)
+- priority: low|medium|high`;
+}
+
+function generateResponseGeneratorPrompt(config: any): string {
+    const bizName = config.business?.business_name || 'firma';
+    const lang = config.business?.language_primary || 'pl';
+    const tone = config.business?.brand_tone || 'semi_formal';
+    const sig = config.business?.email_signature || 'Z poważaniem';
+
+    const toneDesc: Record<string, string> = {
+        formal: 'bardzo formalny, pełne zwroty grzecznościowe, bez skrótów',
+        semi_formal: 'profesjonalny ale przyjazny, rzeczowy',
+        informal: 'przyjazny, bezpośredni, ale nadal uprzejmy'
+    };
+
+    return `SYSTEM: Jesteś asystentem email firmy ${bizName}.
+Generujesz profesjonalne odpowiedzi na emaile klientów i partnerów.
+Język odpowiedzi: ${lang}. Ton: ${tone}.
+
+{{ $('Execute Workflow Trigger').first().json.knowledge_context ? '**ZASADY OBOWIĄZKOWE (BAZA WIEDZY):**\\n' + $('Execute Workflow Trigger').first().json.knowledge_context + '\\n\\n' : '' }}
+
+{{ $('Execute Workflow Trigger').first().json.previous_draft ? '**POPRZEDNI DRAFT:**\\n' + $('Execute Workflow Trigger').first().json.previous_draft + '\\n\\n**FEEDBACK DO POPRAWY:**\\n' + $('Execute Workflow Trigger').first().json.correction_feedback + '\\n\\nWażne: zachowaj co było dobre, zmień tylko to co wskazano w feedback.\\n\\n' : '' }}
+
+**KONTEKST:**
+{{ JSON.stringify($('Execute Workflow Trigger').first().json.context) }}
+
+{{ $('Execute Workflow Trigger').first().json.response_guidance ? '**RESPONSE GUIDANCE:**\\nMust Include: ' + (($('Execute Workflow Trigger').first().json.response_guidance.must_include || []).join('; ')) + '\\nShould Avoid: ' + (($('Execute Workflow Trigger').first().json.response_guidance.should_avoid || []).join('; ')) + '\\n\\n' : '' }}
+
+**TYP ODPOWIEDZI:** {{ $('Execute Workflow Trigger').first().json.template_type }}
+**TON:** {{ $('Execute Workflow Trigger').first().json.tone || '${tone}' }}
+
+---
+
+**ZASADY PISANIA:**
+1. Język: ${lang}
+2. Ton: ${toneDesc[tone] || toneDesc.semi_formal}
+3. Zwięźle — maksymalnie 150-200 słów
+4. Nie wymyślaj informacji których nie masz
+5. Zakończ podpisem:
+${sig}
+
+---
+
+Wygeneruj TYLKO JSON:
+
+{
+  "draft_subject": "RE: temat oryginalnego maila",
+  "draft_body": "Treść odpowiedzi...\\n\\n${sig}",
+  "confidence": 0.9
+}`;
+}
+
+// ─── Main Workflow Generator ──────────────────────────────────────────────────
+
 export async function generateWorkflows(config: any) {
     const generatedWorkflows: Record<string, any> = {};
-    const extractedPrompts: Record<string, string> = {};
 
-    // Deep clone helper
-    const clone = (obj: any) => JSON.parse(JSON.stringify(obj));
+    // Generate AI prompts
+    const classifierPrompt = generateClassifierPrompt(config);
+    const contextBuilderPrompt = generateContextBuilderPrompt(config);
+    const responseGeneratorPrompt = generateResponseGeneratorPrompt(config);
 
     for (const [filename, templateObj] of Object.entries(templates)) {
         const wf = clone(templateObj);
 
-        // Example Node manipulations 
-        // 1. Pipeline Mail Processing Modifications
-        if (filename.includes('06_PIPELINE_Mail_Processing')) {
-            const emailProvider = config.channels?.email_provider || 'gmail';
-
-            wf.nodes.forEach((node: any) => {
-                // Find Switch Node for Routing Intents
-                if (node.name === 'Mail Supervisor (Switch)' && node.typeVersion === 3) {
-                    // Rebuild logic routes based on config.intents
-                    const rules = config.intents.map((intent: any, index: number) => ({
-                        conditions: {
-                            options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
-                            conditions: [{ id: `cond_${index}`, leftValue: '={{ $json.route_intent }}', rightValue: intent.route_key, operator: { type: 'string', operation: 'equals', singleValue: true } }],
-                            combinator: 'and'
-                        },
-                        renameOutput: true,
-                        outputKey: intent.route_key
-                    }));
-
-                    if (!node.parameters) node.parameters = {};
-                    node.parameters.rules = { values: rules };
-                }
-
-                // Example logic for Provider change
-                if (node.type === 'n8n-nodes-base.gmailTrigger' && emailProvider !== 'gmail') {
-                    node.name = `${emailProvider.toUpperCase()} Trigger`;
-                    node.type = `n8n-nodes-base.${emailProvider}Trigger`; // Naive mapping
-                    delete node.credentials;
-                }
-            });
+        // Inject prompts into agent nodes
+        if (filename.includes('01_AGENT')) {
+            const aiNode = findNode(wf.nodes, 'AI Classifier');
+            if (aiNode) aiNode.parameters.text = `=${classifierPrompt}`;
+        }
+        if (filename.includes('02_AGENT')) {
+            const aiNode = findNode(wf.nodes, 'AI Context Builder');
+            if (aiNode) aiNode.parameters.text = `=${contextBuilderPrompt}`;
+        }
+        if (filename.includes('03_AGENT')) {
+            const aiNode = findNode(wf.nodes, 'AI Response Generator');
+            if (aiNode) aiNode.parameters.text = `=${responseGeneratorPrompt}`;
         }
 
-        // 2. Extract AI Prompts to separate text files
-        wf.nodes.forEach((node: any) => {
-            if (node.type === 'n8n-nodes-base.openAi' || node.type === '@n8n/n8n-nodes-langchain.agent') {
-                const messageValues = node.parameters?.messages?.messageValues;
-                if (Array.isArray(messageValues) && messageValues.length > 0) {
-                    const promptStr = messageValues[0].message;
-                    if (typeof promptStr === 'string' && promptStr.length > 0) {
-                        let processedPrompt = promptStr;
-                        if (node.name === 'AI Classifier') {
-                            processedPrompt = processedPrompt.replace('{{business_name}}', config.business?.business_name || 'Agencja ABC');
-                        }
-
-                        const promptFilename = `${node.name.replace(/[^a-zA-Z0-9]/g, '_')}.txt`;
-                        extractedPrompts[promptFilename] = processedPrompt;
-
-                        // Replace with explicit instruction placeholder for user/Antygravity
-                        node.parameters.messages.messageValues[0].message = `=// UWAGA: Kliknij ikonę trybu "Expression" na tym polu i wklej zawartość pliku "prompts/${promptFilename}" ze swojego ZIPa.\n// Ten node potrzebuje tego promptu do działania.`;
-                    }
-                }
-            }
-        });
+        // Inject pipeline data
+        if (filename.includes('06_PIPELINE')) {
+            injectWorkflow06(wf, config);
+        }
+        if (filename.includes('10_PIPELINE')) {
+            injectWorkflow10(wf, config);
+        }
+        if (filename.includes('11_WORKFLOW')) {
+            injectWorkflow11(wf, config);
+        }
 
         generatedWorkflows[filename] = wf;
     }
 
-    return { generatedWorkflows, extractedPrompts };
+    return { generatedWorkflows };
 }
 
-// 2b. ENV Example Generator
+// ─── ENV Example ──────────────────────────────────────────────────────────────
+
 export function generateEnvExample(config: any): string {
-    const host = config.channels?.n8n_host || 'http://localhost:5678';
-    const storage = config.channels?.storage_backend || 'airtable';
+    const host = 'http://localhost:5678';
+    const bizName = config.business?.business_name || 'Twoja Firma';
 
-    let storageVars = '';
-    if (storage === 'airtable') {
-        storageVars = `
-# === Airtable ===
-AIRTABLE_API_TOKEN="TWÓJ_PERSONAL_ACCESS_TOKEN" # Wygeneruj na: https://airtable.com/create/tokens (scope: data.records:read, data.records:write, schema.bases:read)
-AIRTABLE_BASE_ID="appXXXXXXXXXXXXXX" # Znajdziesz w URL bazy: https://airtable.com/appXXX.../...
-AIRTABLE_TABLE_NAME="Draft_Queue" # Nazwa tabeli z draftami
-`;
-    } else if (storage === 'postgres') {
-        storageVars = `
-# === PostgreSQL ===
-PG_HOST="localhost"
-PG_PORT="5432"
-PG_DATABASE="email_agent"
-PG_USER="TWÓJ_UŻYTKOWNIK"
-PG_PASSWORD="TWOJE_HASŁO"
-`;
-    } else if (storage === 'google_sheets') {
-        storageVars = `
-# === Google Sheets ===
-GOOGLE_SHEETS_SPREADSHEET_ID="TWOJE_ID_ARKUSZA" # Znajdziesz w URL: https://docs.google.com/spreadsheets/d/ID_TUTAJ/edit
-GOOGLE_SHEETS_TAB_NAME="Draft_Queue"
-`;
-    }
-
-    return `# Konfiguracja środowiska n8n dla: ${config.business?.business_name || 'Twoja Firma'}
+    return `# Konfiguracja środowiska n8n dla: ${bizName}
 # Skopiuj ten plik jako .env i uzupełnij wartości.
 
 # === n8n API ===
-N8N_HOST="${host}" # Zmodyfikuj jeśli korzystasz z chmury, np. https://twoja-instancja.app.n8n.cloud
+N8N_HOST="${host}" # Zmień jeśli używasz chmury, np. https://twoja-instancja.app.n8n.cloud
 N8N_API_KEY="TWÓJ_KLUCZ_API_N8N" # Wygeneruj w n8n: Settings > n8n API
-${storageVars}`;
+
+# === Airtable ===
+AIRTABLE_API_TOKEN="TWÓJ_PERSONAL_ACCESS_TOKEN" # Wygeneruj na: https://airtable.com/create/tokens
+AIRTABLE_BASE_ID="${config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX'}"
+AIRTABLE_TABLE_NAME="Draft_Queue"
+
+# === Google Chat ===
+GOOGLE_CHAT_SPACE_ID="${config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID'}"
+
+# === Gmail ===
+GMAIL_INBOX="${config.channels?.email_inbox_address || 'kontakt@firma.pl'}"
+
+# === OpenAI ===
+OPENAI_API_KEY="sk-..."
+`;
 }
 
-// 2c. AI Installer Prompt Generator
+// ─── Installer Prompt ─────────────────────────────────────────────────────────
+
 export function generateInstallerPrompt(config: any): string {
     const bizName = config.business?.business_name || 'Twoja Firma';
-    const provider = config.channels?.email_provider || 'gmail';
-    const storage = config.channels?.storage_backend || 'airtable';
-    const approvalChannel = config.channels?.approval_channel || 'slack';
+    const approvalChannel = config.channels?.approval_channel || 'none';
+    const airtableBaseId = config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX';
+    const prefix = (config.channels?.webhook_prefix || 'agent').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 
     const workflowFiles = [
         '01_AGENT_Email_Classifier.json',
@@ -160,185 +634,91 @@ export function generateInstallerPrompt(config: any): string {
         '11_WORKFLOW_Feedback_Loop.json'
     ];
 
-    const credentialsList: string[] = [];
-    if (provider === 'gmail') credentialsList.push('- [ ] **Gmail API (OAuth2)** — wymagane w 06_PIPELINE');
-    else if (provider === 'outlook') credentialsList.push('- [ ] **Microsoft Outlook (OAuth2)** — wymagane w 06_PIPELINE');
-    else credentialsList.push(`- [ ] **${provider.toUpperCase()} (IMAP/SMTP)** — wymagane w 06_PIPELINE`);
-
-    if (storage === 'airtable') credentialsList.push('- [ ] **Airtable API** — Upewnij się, że podmieniłeś ID bazy na swoje Base ID dla tabeli Draft_Queue!');
-    else if (storage === 'postgres') credentialsList.push('- [ ] **PostgreSQL** — podłącz bazę danych z tabelą Draft_Queue');
-    else if (storage === 'google_sheets') credentialsList.push('- [ ] **Google Sheets (OAuth2)** — podłącz arkusz pełniący rolę Draft_Queue');
-
-    credentialsList.push('- [ ] **Klucze LLM (np. OpenAI / Anthropic)** — wymagane we wszystkich agentach AI');
-
-    if (approvalChannel === 'slack') credentialsList.push('- [ ] **Slack Bot Token** — kanał powiadomień o draftach');
-    else if (approvalChannel === 'telegram') credentialsList.push('- [ ] **Telegram Bot API** — do wysyłki draftów do zatwierdzenia');
-    else if (approvalChannel === 'google_chat') credentialsList.push('- [ ] **Google Chat Webhook** — kanał akceptacji');
-
-    // Build storage setup step conditionally
-    let storageStep = '';
-    if (storage === 'airtable') {
-        storageStep = `
----
-
-## KROK 4: Konfiguracja Airtable – Baza Danych dla Draftów
-Agent pocztowy potrzebuje tabeli w Airtable do przechowywania wygenerowanych odpowiedzi (draftów) przed wysłaniem.
-
-1. Napisz użytkownikowi:
-   *"Teraz skonfigurujemy Airtable jako bazę danych dla Twoich draftów e-mail. Przeprowadzę Cię przez to krok po kroku."*
-
-2. **Tworzenie bazy i tabeli:**
-   Poinstruuj kursanta:
-   - Otwórz [airtable.com](https://airtable.com) i zaloguj się (lub utwórz darmowe konto).
-   - Kliknij **"Add a base"** → nadaj jej nazwę np. **"${bizName} – Email Agent"**.
-   - W nowej bazie zmień nazwę domyślnej tabeli na **\`Draft_Queue\`**.
-   - Utwórz następujące kolumny (podaj kursantowi dokładne nazwy i typy):
-
-   | Nazwa kolumny       | Typ w Airtable       | Opis                                    |
-   |---------------------|----------------------|-----------------------------------------|
-   | \`email_thread_id\`   | Single line text     | ID wątku email (klucz powiązania)       |
-   | \`from_address\`      | Single line text     | Adres nadawcy oryginalnego maila        |
-   | \`subject\`           | Single line text     | Temat wiadomości                        |
-   | \`draft_body\`        | Long text            | Treść wygenerowanej odpowiedzi          |
-   | \`status\`            | Single select        | Wartości: \`pending\`, \`approved\`, \`sent\`, \`rejected\` |
-   | \`route_intent\`      | Single line text     | Rozpoznana intencja (np. new_inquiry)   |
-   | \`created_at\`        | Created time         | Automatyczny timestamp utworzenia       |
-   | \`approved_by\`       | Single line text     | Kto zatwierdził draft                   |
-
-3. **Generowanie klucza API Airtable:**
-   Poinstruuj kursanta:
-   - Wejdź na [airtable.com/create/tokens](https://airtable.com/create/tokens).
-   - Kliknij **"Create new token"**.
-   - Nadaj nazwę np. **"n8n-email-agent"**.
-   - Dodaj scope'y: \`data.records:read\`, \`data.records:write\`, \`schema.bases:read\`.
-   - W sekcji **Access**, dodaj bazę którą właśnie utworzyłeś.
-   - Skopiuj wygenerowany token (zaczyna się od \`pat...\`).
-
-4. **Pobranie Base ID:**
-   Poinstruuj kursanta:
-   - Otwórz swoją bazę w Airtable.
-   - Znajdź **Base ID** w URL: \`https://airtable.com/appXXXXXXXXXXXXXX/...\` → \`appXXXXXXXXXXXXXX\` to Twoje Base ID.
-
-5. **Zapisanie danych w \`.env\`:**
-   Poinstruuj kursanta:
-   - Otwórz plik \`.env\` (który utworzyłeś w Kroku 1).
-   - Uzupełnij pola:
-     - \`AIRTABLE_API_TOKEN\` → wklej skopiowany token (zaczynający się od \`pat...\`)
-     - \`AIRTABLE_BASE_ID\` → wklej Base ID (zaczynające się od \`app...\`)
-     - \`AIRTABLE_TABLE_NAME\` → zostaw \`Draft_Queue\` (chyba że zmieniono nazwę tabeli)
-
-6. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE.**
-   Napisz: *"Potwierdź, że: (1) tabela Draft_Queue jest utworzona z powyższymi kolumnami, (2) token API i Base ID zostały wpisane do pliku .env. Napisz 'Gotowe'."*
-`;
-    } else if (storage === 'postgres') {
-        storageStep = `
----
-
-## KROK 4: Konfiguracja PostgreSQL – Baza Danych dla Draftów
-1. Napisz: *"Teraz skonfigurujemy PostgreSQL jako bazę danych dla draftów email."*
-2. Poinstruuj kursanta aby utworzył tabelę \`Draft_Queue\` z następującymi kolumnami:
-   - \`id\` (SERIAL PRIMARY KEY)
-   - \`email_thread_id\` (VARCHAR)
-   - \`from_address\` (VARCHAR)
-   - \`subject\` (VARCHAR)
-   - \`draft_body\` (TEXT)
-   - \`status\` (VARCHAR DEFAULT 'pending') — wartości: pending, approved, sent, rejected
-   - \`route_intent\` (VARCHAR)
-   - \`created_at\` (TIMESTAMP DEFAULT NOW())
-   - \`approved_by\` (VARCHAR)
-3. Poproś o dane połączenia: host, port, nazwę bazy, użytkownika i hasło.
-4. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE.**
-`;
-    } else if (storage === 'google_sheets') {
-        storageStep = `
----
-
-## KROK 4: Konfiguracja Google Sheets – Arkusz dla Draftów
-1. Napisz: *"Teraz skonfigurujemy Google Sheets jako bazę danych dla draftów email."*
-2. Poinstruuj kursanta aby utworzył nowy arkusz Google z nagłówkami: \`email_thread_id\`, \`from_address\`, \`subject\`, \`draft_body\`, \`status\`, \`route_intent\`, \`created_at\`, \`approved_by\`.
-3. Poproś o udostępnienie arkusza kontu serwisowemu Google lub podłączenie przez OAuth.
-4. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE.**
-`;
-    }
-
-    // Dynamic step numbering based on whether storage step exists
-    const hasStorageStep = storageStep.length > 0;
-    const importStepNum = hasStorageStep ? 5 : 4;
-    const credentialsStepNum = hasStorageStep ? 6 : 5;
+    const approvalNote = approvalChannel === 'google_chat'
+        ? `Kanał akceptacji: **Google Chat**. Space ID: \`${config.channels?.google_chat_space_id || 'spaces/...'}\`\n\nWebhook URL approval handlera: \`https://TWOJ_N8N/webhook/${prefix}-approval\` — ten adres wpisz jako webhook URL w Google Chat App konfiguracji.`
+        : `Kanał akceptacji: **none** — drafty zapisywane są w Airtable, ale nie wysyłane powiadomienia. Możesz ręcznie zatwierdzić z Airtable.`;
 
     return `# SYSTEM PROMPT: N8N Automated Deployment Agent
 
 **Projekt:** ${bizName}
-**Rola:** Jesteś zaawansowanym inżynierem AI (np. agentem Antigravity). Twój cel to w pełni zautomatyzowane wdrożenie agenta pocztowego do instancji n8n użytkownika. Zakładasz pełną barierę technologiczną – użytkownik startuje "od zera". Nie ma podpiętego n8n API, nie ma serwera MCP ani zainstalowanych n8n-skills.
-
-**Zasada Krytyczna:** Przeprowadzasz użytkownika krok po kroku. Rozwiązujesz wyłącznie jeden krok na raz i **ZAWSZE** kończysz wypowiedź prosząc uczestnika o zatwierdzenie (np. *"Napisz Gotowe"*), zanim przejdziesz do następnego punktu instrukcji!
+**Rola:** Jesteś zaawansowanym inżynierem AI (np. agentem działającym w Claude Code z MCP). Twój cel to wdrożenie agenta mailowego do instancji n8n użytkownika. Przeprowadzasz go krok po kroku — rozwiązujesz wyłącznie jeden krok naraz i **ZAWSZE** kończysz prosząc o potwierdzenie zanim przejdziesz dalej.
 
 ---
 
-## KROK 1: Autoryzacja i API
-1. Przywitaj się i powiedz: *"Aby móc wgrywać dane do Twojego systemu, potrzebuję dostępu do n8n API."*
-2. Poinstruuj kursanta łagodnie, gdzie ma wygenerować klucz w n8n (**Settings \> n8n API**).
-3. Poproś go o otwarcie pliku \`.env.example\`, wpisanie tam tych danych i zmianę nazwy na \`.env\`.
-4. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE** (Nie idź dalej dopóki kursant nie odpisze).
+## KROK 1: Autoryzacja i API n8n
+1. Przywitaj się i powiedz: *"Potrzebuję dostępu do Twojego n8n API."*
+2. Poproś o wygenerowanie klucza: n8n → Settings > n8n API > Create API Key.
+3. Poproś o otwarcie pliku \`.env.example\`, uzupełnienie danych i zmianę nazwy na \`.env\`.
+4. **🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-## KROK 2: Uzbrojenie AI – Integracja Narzędzi MCP (Serwer n8n-mcp)
-Jako agent potrzebujesz "supermocy" bezpośredniej komunikacji z n8n.
-1. Napisz użytkownikowi: *"Będę potrzebował narzędzia MCP, które pozwoli mi bezpośrednio zarządzać Twoim n8n. Zainstalujmy je."*
-2. Poproś o wklejenie i odpalenie wygenerowanej komendy w jego terminalu, która instaluje serwer n8n:
-   \`\`\`bash
-   npx @modelcontextprotocol/create-server n8n-mcp
-   \`\`\`
-   Przeprowadź go przez ewentualne przepięcie configa agenta.
-3. Przedstaw mu jak upewnić się, że to działa (np. wywołanie testowe \`list_workflows\`).
-4. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE.**
+## KROK 2: Przygotowanie Airtable
+Base ID: \`${airtableBaseId}\`
+
+1. Napisz: *"Teraz skonfigurujemy Airtable."*
+2. Poinstruuj aby utworzył bazę z tabelą **\`Draft_Queue\`** z kolumnami:
+
+| Kolumna | Typ |
+|---|---|
+| \`draft_id\` | Single line text |
+| \`email_thread_id\` | Single line text |
+| \`email_from\` | Single line text |
+| \`email_subject\` | Single line text |
+| \`draft_subject\` | Single line text |
+| \`draft_body\` | Long text |
+| \`draft_gmail_id\` | Single line text |
+| \`classification\` | Long text |
+| \`context\` | Long text |
+| \`status\` | Single select (pending_approval, sent, rejected) |
+| \`edit_count\` | Number |
+| \`approved_by\` | Single line text |
+
+Oraz drugą tabelę **\`Draft_Corrections\`** z kolumnami:
+\`correction_id\`, \`draft_id\`, \`original_draft\`, \`feedback_text\`, \`corrected_draft\`, \`correction_type\`, \`classification_intent\`, \`classification_tone\`, \`corrected_by\`
+
+3. Personal Access Token: airtable.com/create/tokens (scope: data.records:read/write, schema.bases:read)
+4. **🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-## KROK 3: Ładowanie "n8n Skills"
-Abyś skutecznie testował n8n i naprawiał błędy, musisz przyswoić publiczną paczkę "skills".
-1. Napisz: *"Teraz zainstalujemy paczkę wiedzy (n8n-skills), dzięki której będę rozumiał błędy i architekturę workflow."*
-2. Wyślij komendę:
-   \`\`\`bash
-   git clone https://github.com/czlonkowski/n8n-skills.git ~/.agents/skills/n8n-skills
-   \`\`\`
-3. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE.**
-${storageStep}
----
-
-## KROK ${importStepNum}: Automatyczny Import Workflows do n8n
-Gdy potwierdzono, że API/MCP/skille działają:
-1. Napisz: *"Wdrażam system w Twoim n8n!"*
-2. Wczytaj pliki JSON workflow z folderu \`workflows/\`:
-${workflowFiles.map(f => `   - \`${f}\``).join('\n')}
-3. **Krytyczne:** Najpierw importuj Sub-workflowy (\`01_AGENT...\`, \`02_...\`, \`03_...\`), a dopiero na końcu główne procesy (\`06_PIPELINE...\`, \`10_PIPELINE...\`, \`11_WORKFLOW...\`).
-4. Podczas importu procesów głównych, zaktualizuj ich wewnętrzne identyfikatory wywołań (node "Execute Workflow"), aby odwoływały się do poprawnych ID nowo utworzonych sub-agentów!
-5. **🛑 ZATRZYMAJ SIĘ I CZEKAJ NA POTWIERDZENIE.**
+## KROK 3: Import Workflows do n8n
+1. Napisz: *"Importuję workflows do n8n!"*
+2. Importuj pliki z folderu \`workflows/\` w tej **obowiązkowej kolejności**:
+${workflowFiles.map((f, i) => `   ${i + 1}. \`${f}\``).join('\n')}
+3. **Ważne:** Pierwsze 3 (AGENT) importuj przed pipeline'ami.
+4. **🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-## KROK ${credentialsStepNum}: Audyt Dostępów Credentials i Testowanie E2E
-Przekaż instrukcję:
-*"Przejdź teraz do sekcji Credentials w swoim n8n i powiąż odpowiednie dostępy z zaimportowanymi nodami:"*
+## KROK 4: Konfiguracja Credentiali w n8n
+Podłącz w n8n (Settings > Credentials):
 
-${credentialsList.join('\n')}
+- [ ] **Gmail OAuth2** — skrzynka: \`${config.channels?.email_inbox_address || 'kontakt@firma.pl'}\`
+- [ ] **Airtable Personal Access Token** — base ID: \`${airtableBaseId}\`
+- [ ] **OpenAI API** — klucz do modeli gpt-4o i gpt-4o-mini
+${approvalChannel === 'google_chat' ? '- [ ] **Google Chat OAuth2** — wymagane dla kanału akceptacji\n' : ''}
 
-*"Napisz 'Gotowe' gdy odhaczysz wszystkie punkty."*
+${approvalNote}
 
-Gdy kursant to potwierdzi:
-1. Przejdź do manualnego symulowania uruchomienia, korzystając z testowych ładunków z folderu \`tests/\`.
-2. Wyślij POST request na webhook n8n z danymi z \`tests/test_new_inquiry.json\`.
-3. Wykorzystaj skille z \`n8n-skills\` by debugować wszystkie potencjalne błędy.
-4. Instruuj kursanta aż wyślemy pozytywny request przez cały pipeline.
+**🛑 CZEKAJ NA POTWIERDZENIE.**
 
 ---
 
-> **Sukces!** Gdy cały pipeline przejdzie poprawnie, pogratuluj kursantowi i podsumuj co zostało wdrożone.
+## KROK 5: Test E2E
+1. Wyślij testowy POST request z pliku \`tests/test_new_inquiry.json\` na webhook n8n.
+2. Sprawdź czy w Airtable pojawił się rekord w Draft_Queue.
+3. Sprawdź czy w Google Chat przyszło powiadomienie (jeśli skonfigurowane).
+4. Pogratuluj i podsumuj co zostało wdrożone.
+
+---
+
+> **Sukces!** System ${bizName} jest gotowy. Agent mailowy przetworzy każdy nowy email: sklasyfikuje intencję, zbuduje kontekst, wygeneruje draft odpowiedzi i wyśle do akceptacji.
 `;
 }
 
-// 2d. Test Payloads Generator
+// ─── Test Payloads ────────────────────────────────────────────────────────────
+
 export function generateTestPayloads(config: any): Record<string, any> {
     const bizName = config.business?.business_name || 'Firma Testowa';
     const inboxAddress = config.channels?.email_inbox_address || 'kontakt@firma.pl';
@@ -357,104 +737,97 @@ export function generateTestPayloads(config: any): Record<string, any> {
             html: `<p>${overrides.body || 'Treść testowa'}</p>`
         },
         metadata: {
-            labels: overrides.labels || [],
             thread_id: overrides.thread_id || `thread_${Date.now()}`,
             is_reply: overrides.is_reply || false
-        }
+        },
+        _test_meta: overrides._test_meta || {}
     });
 
     const payloads: Record<string, any> = {};
 
-    // Test 1: New inquiry
     const newInquiryIntent = intents.find((i: any) => i.route_key === 'new_inquiry');
     payloads['test_new_inquiry.json'] = basePayload({
         from: 'jan.kowalski@klient.pl',
-        subject: `Zapytanie ofertowe do ${bizName}`,
-        body: `Dzień dobry,\n\nChciałbym zapytać o Państwa ofertę. Interesuje mnie współpraca w zakresie usług, które Państwo oferujecie.\n\nProszę o przesłanie szczegółowej oferty cenowej.\n\nZ poważaniem,\nJan Kowalski\nFirma XYZ Sp. z o.o.`,
-        labels: [],
-        is_reply: false,
+        subject: `Zapytanie ofertowe — ${bizName}`,
+        body: `Dzień dobry,\n\nChciałbym zapytać o Państwa ofertę. Interesuje mnie współpraca i chciałbym poznać dostępne opcje oraz orientacyjne ceny.\n\nProszę o kontakt.\n\nZ poważaniem,\nJan Kowalski`,
         _test_meta: {
             expected_intent: newInquiryIntent?.route_key || 'new_inquiry',
-            expected_auto_reply: newInquiryIntent?.auto_reply_enabled ?? true,
-            expected_approval: newInquiryIntent?.requires_approval ?? true,
             description: 'Nowe zapytanie ofertowe od potencjalnego klienta'
         }
     });
 
-    // Test 2: Follow up
     const followUpIntent = intents.find((i: any) => i.route_key === 'follow_up');
     payloads['test_follow_up.json'] = basePayload({
         from: 'anna.nowak@partner.com',
-        subject: `Re: Współpraca z ${bizName} - dokumenty`,
-        body: `Dzień dobry,\n\nDziękuję za wcześniejszą odpowiedź. W nawiązaniu do naszej rozmowy, przesyłam dodatkowe pytania:\n\n1. Jaki jest termin realizacji?\n2. Czy jest możliwość negocjacji warunków?\n\nCzekam na informację.\n\nPozdrawiam,\nAnna Nowak`,
+        subject: `Re: Oferta — ${bizName}`,
+        body: `Dzień dobry,\n\nDziękuję za poprzednią odpowiedź. Mam kilka dodatkowych pytań:\n\n1. Jaki jest termin realizacji?\n2. Czy istnieje możliwość negocjacji?\n\nCzekam na informację.\n\nPozdrawiam,\nAnna Nowak`,
         thread_id: 'thread_existing_123',
         is_reply: true,
         _test_meta: {
             expected_intent: followUpIntent?.route_key || 'follow_up',
-            expected_auto_reply: followUpIntent?.auto_reply_enabled ?? true,
-            expected_approval: followUpIntent?.requires_approval ?? true,
-            description: 'Kontynuacja istniejącego wątku z partnerem'
+            description: 'Kontynuacja rozmowy'
         }
     });
 
-    // Test 3: Spam / Ignore
-    const ignoreIntent = intents.find((i: any) => i.route_key === 'ignore');
+    const ignoreIntent = intents.find((i: any) => !i.auto_reply_enabled);
     payloads['test_spam_ignore.json'] = basePayload({
         from: 'newsletter@massmailing.com',
-        subject: '🔥 MEGA PROMOCJA - Tylko dziś -90%! Nie przegap!',
-        body: 'Kliknij tutaj aby odebrać swoją nagrodę! Oferta ważna tylko 24h. Wypisz się klikając link poniżej.',
-        labels: [],
-        is_reply: false,
+        subject: '🔥 MEGA PROMOCJA — Tylko dziś -90%!',
+        body: 'Kliknij tutaj aby odebrać nagrodę! Oferta ważna tylko 24h.',
         _test_meta: {
             expected_intent: ignoreIntent?.route_key || 'ignore',
-            expected_auto_reply: false,
-            expected_approval: false,
-            description: 'Spam / newsletter - powinien zostać zignorowany'
+            description: 'Spam — powinien zostać zignorowany'
         }
     });
 
     return payloads;
 }
 
-// 3. Artifact Prompts & Checklist Creator
+// ─── Artifacts ────────────────────────────────────────────────────────────────
+
 export function generateArtifacts(config: any) {
-    const checklist = `
-# N8N Email Agent - Instrukcja Wdrożenia
+    const bizName = config.business?.business_name || 'Twoja Firma';
+    const prefix = (config.channels?.webhook_prefix || 'agent').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 
-## 1. Konfiguracja Credentiali
-Aplikacja została wygenerowana dla providera: **${config.channels?.email_provider}**. 
-- Upewnij się, że w n8n dodałeś odpowiednie klucze dla "${config.channels?.email_inbox_address}".
+    const checklist = `# ${bizName} — Instrukcja wdrożenia agenta mailowego
 
-## 2. Architektura bazy danych (${config.channels?.storage_backend})
-Musisz założyć tabelę \`Draft_Queue\` w ${config.channels?.storage_backend} zawierającą kolumny:
-- id (string)
-- email_thread_id (string)
-- draft_body (text)
-- status (string)
+## Architektura systemu
+- **3 agenty AI**: Klasyfikator, Context Builder, Generator odpowiedzi
+- **3 pipeline'y**: Mail Processing, Approval Handler, Feedback Loop
+- **Storage**: Airtable (tabela Draft_Queue)
+- **Kanał akceptacji**: ${config.channels?.approval_channel || 'none'}
 
-## 3. Webhooki Akceptacji
-Kanał akceptacji to **${config.channels?.approval_channel}**. 
-- Podłącz publiczny URL pod Webhook w n8n dla \`10_PIPELINE_Approval_Handler.json\`.
+## Webhook URL
+Approval Handler nasłuchuje na: \`/webhook/${prefix}-approval\`
+
+## Kolejność importu workflows (OBOWIĄZKOWA)
+1. 01_AGENT_Email_Classifier.json
+2. 02_AGENT_Context_Builder.json
+3. 03_AGENT_Response_Generator.json
+4. 06_PIPELINE_Mail_Processing.json
+5. 10_PIPELINE_Approval_Handler.json
+6. 11_WORKFLOW_Feedback_Loop.json
+
+## Intencje skonfigurowane
+${(config.intents || []).map((i: any) => `- **${i.route_key}**: ${i.description} (${i.requires_approval ? 'wymaga akceptacji' : 'bez akceptacji'})`).join('\n')}
+
+## Airtable
+Base ID: \`${config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX'}\`
+Tabela 1: \`Draft_Queue\`
+Tabela 2: \`Draft_Corrections\`
 `;
 
-    const kb = `
-# Knowledge Base & Polityka
-Business: ${config.business?.business_name} (${config.business?.industry})
-Ton: ${config.business?.brand_tone}
+    const kb = `# Baza wiedzy — ${bizName}
 
-Zasady twarde:
+## Zasady odpowiedzi
 ${config.policy?.must_follow_rules || ''}
 
-Polityka ofertowa/cenowa:
+## Oferta i cennik
 ${config.policy?.pricing_and_offer_policy || ''}
 
-SLA: ${config.policy?.sla_response_hours}h
+${(config.policy?.forbidden_phrases || []).length > 0 ? `## Zwroty zakazane\n${(config.policy?.forbidden_phrases || []).map((f: string) => `- ${f}`).join('\n')}` : ''}
 
-=== Zewnętrzna Baza Wiedzy (FAQ / Materiały) ===
-${(config.policy?.knowledge_base_entries || []).map((entry: any) => `
-## ${entry.topic || 'Bez Tytułu'}
-${entry.content_markdown || ''}
-`).join('\\n')}
+${(config.policy?.knowledge_base_entries || []).map((e: any) => `## ${e.topic || 'Temat'}\n${e.content_markdown || ''}`).join('\n\n')}
 `;
 
     return {
@@ -463,50 +836,35 @@ ${entry.content_markdown || ''}
     };
 }
 
-// 4. Zipper
+// ─── ZIP Builder ──────────────────────────────────────────────────────────────
+
 export async function downloadZip(config: any) {
-    const { generatedWorkflows: workflows, extractedPrompts } = await generateWorkflows(config);
+    const { generatedWorkflows } = await generateWorkflows(config);
     const artifacts = generateArtifacts(config);
+    const testPayloads = generateTestPayloads(config);
 
     const zip = new JSZip();
+    const workflowsFolder = zip.folder('workflows');
+    const artifactsFolder = zip.folder('artifacts');
+    const testsFolder = zip.folder('tests');
 
-    // Folders
-    const workflowsFolder = zip.folder("workflows");
-    const artifactsFolder = zip.folder("artifacts");
-    const promptsFolder = zip.folder("prompts");
-    const testsFolder = zip.folder("tests");
-
-    // Add workflows
-    for (const [filename, content] of Object.entries(workflows)) {
+    for (const [filename, content] of Object.entries(generatedWorkflows)) {
         workflowsFolder?.file(filename, JSON.stringify(content, null, 2));
     }
 
-    // Add artifacts
     for (const [filename, content] of Object.entries(artifacts)) {
         artifactsFolder?.file(filename, content as string);
     }
 
-    // Add external prompts
-    for (const [filename, content] of Object.entries(extractedPrompts)) {
-        promptsFolder?.file(filename, content as string);
-    }
-
-    // Raw config
-    zip.file("agent_config.json", JSON.stringify(config, null, 2));
-
-    // .env.example
-    zip.file(".env.example", generateEnvExample(config));
-
-    // AI Installer Prompt (the key step-by-step guide)
-    zip.file("ai_installer_prompt.md", generateInstallerPrompt(config));
-
-    // Test payloads
-    const testPayloads = generateTestPayloads(config);
     for (const [filename, content] of Object.entries(testPayloads)) {
         testsFolder?.file(filename, JSON.stringify(content, null, 2));
     }
 
-    // Generate and Download
-    const content = await zip.generateAsync({ type: "blob" });
-    saveAs(content, `n8n-agent-${config.business?.business_name?.replace(/\\s+/g, '-') || 'config'}.zip`);
+    zip.file('agent_config.json', JSON.stringify(config, null, 2));
+    zip.file('.env.example', generateEnvExample(config));
+    zip.file('ai_installer_prompt.md', generateInstallerPrompt(config));
+
+    const content = await zip.generateAsync({ type: 'blob' });
+    const safeName = (config.business?.business_name || 'agent').replace(/\s+/g, '-').toLowerCase();
+    saveAs(content, `n8n-agent-${safeName}.zip`);
 }

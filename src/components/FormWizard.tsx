@@ -15,8 +15,9 @@ export default function FormWizard({ onComplete }: { onComplete: (data: FormStat
         sections.forEach(sec => {
             initial[sec.id] = {};
             sec.questions.forEach(q => {
-                if (q.default !== undefined) {
-                    initial[sec.id][q.id] = q.default;
+                const qAny = q as any;
+                if (qAny.default !== undefined) {
+                    initial[sec.id][q.id] = qAny.default;
                 } else if (q.type === 'boolean') {
                     initial[sec.id][q.id] = false;
                 } else if (q.type === 'array' || q.type === 'array_text') {
@@ -62,6 +63,7 @@ export default function FormWizard({ onComplete }: { onComplete: (data: FormStat
                         type={q.type}
                         className="w-full mt-1 px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-shadow outline-none"
                         value={value}
+                        placeholder={q.placeholder || ''}
                         onChange={(e) => handleChange(section.id, q.id, q.type === 'number' ? Number(e.target.value) : e.target.value)}
                         required={q.required}
                     />
@@ -83,8 +85,9 @@ export default function FormWizard({ onComplete }: { onComplete: (data: FormStat
             case 'textarea':
                 return (
                     <textarea
-                        className="w-full mt-1 px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none min-h-[100px]"
+                        className="w-full mt-1 px-4 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none min-h-[140px]"
                         value={value}
+                        placeholder={q.placeholder || ''}
                         onChange={(e) => handleChange(section.id, q.id, e.target.value)}
                         required={q.required}
                     />

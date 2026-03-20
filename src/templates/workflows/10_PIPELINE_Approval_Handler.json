@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse action data from Google Chat webhook\nconst webhook = $input.first().json;\nconst action = webhook.action?.function || webhook.commonEventObject?.invokedFunction || 'unknown';\nconst params = webhook.action?.parameters || webhook.commonEventObject?.parameters || [];\n\n// Extract draft_id from parameters\nlet draft_id;\nif (Array.isArray(params)) {\n  const draftParam = params.find(p => p.key === 'draft_id');\n  draft_id = draftParam?.value;\n} else {\n  draft_id = params.draft_id;\n}\n\nconst user_email = webhook.user?.email || webhook.user?.name || 'unknown';\nconst user_name = webhook.user?.displayName || webhook.user?.name || 'Unknown User';\n\nreturn {\n  json: {\n    action: action.replace('_draft', ''),\n    draft_id: draft_id,\n    user_email: user_email,\n    user_name: user_name,\n    raw_webhook: webhook\n  }\n};"
+        "jsCode": "// Parse action data from Google Chat webhook\nconst webhook = $input.first().json;\nconst action = webhook.action?.function || webhook.commonEventObject?.invokedFunction || 'unknown';\nconst params = webhook.action?.parameters || webhook.commonEventObject?.parameters || [];\n\nlet draft_id;\nif (Array.isArray(params)) {\n  const draftParam = params.find(p => p.key === 'draft_id');\n  draft_id = draftParam?.value;\n} else {\n  draft_id = params.draft_id;\n}\n\nconst user_email = webhook.user?.email || webhook.user?.name || 'unknown';\nconst user_name = webhook.user?.displayName || webhook.user?.name || 'Unknown User';\n\nreturn {\n  json: {\n    action: action.replace('_draft', ''),\n    draft_id,\n    user_email,\n    user_name,\n    raw_webhook: webhook\n  }\n};"
       },
       "name": "Parse Action Data",
       "type": "n8n-nodes-base.code",
@@ -128,9 +128,14 @@
     },
     {
       "parameters": {
-        "resource": "draft",
+        "resource": "message",
         "operation": "send",
-        "draftId": "={{ $json.draft_gmail_id }}"
+        "sendTo": "={{ $json.email_from }}",
+        "subject": "={{ $json.draft_subject }}",
+        "message": "={{ $json.draft_body }}",
+        "options": {
+          "threadId": "={{ $json.email_thread_id }}"
+        }
       },
       "name": "APPROVE: Send Gmail",
       "type": "n8n-nodes-base.gmail",
@@ -152,10 +157,10 @@
         "operation": "update",
         "base": "app5NIUbshNL31ylr",
         "table": "Draft_Queue",
-        "id": "={{ $json.id }}",
+        "id": "={{ $('Get Draft from Airtable').item.json.id }}",
         "fields": {
           "status": "sent",
-          "approved_by": "={{ $json.user_email }}",
+          "approved_by": "={{ $('Parse Action Data').item.json.user_email }}",
           "approved_at": "={{ new Date().toISOString() }}",
           "sent_at": "={{ new Date().toISOString() }}"
         },
@@ -173,12 +178,11 @@
           "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
           "name": "Airtable Personal Access Token"
         }
-      },
-      "notes": "Mark draft as sent in Airtable"
+      }
     },
     {
       "parameters": {
-        "text": "=✅ **EMAIL WYSŁANY**\n\nDo: {{ $json.email_from }}\nTemat: {{ $json.draft_subject }}\n\nWysłane przez: {{ $json.user_name }}",
+        "text": "=✅ **EMAIL WYSŁANY**\n\nDo: {{ $('Get Draft from Airtable').item.json.email_from }}\nTemat: {{ $('Get Draft from Airtable').item.json.draft_subject }}\n\nWysłane przez: {{ $('Parse Action Data').item.json.user_name }}",
         "options": {}
       },
       "name": "APPROVE: Notify Success",
@@ -193,8 +197,7 @@
           "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
           "name": "Google Chat OAuth2"
         }
-      },
-      "notes": "Send confirmation to Google Chat"
+      }
     },
     {
       "parameters": {
@@ -204,7 +207,7 @@
         "nodeCredentialType": "googleChatOAuth2Api",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  text: '✏️ **EDYCJA DRAFTU**\\n\\nCo chcesz poprawić w drafcie?\\n\\nAktualna treść:\\n---\\n' + $json.draft_body + '\\n---',\n  cardsV2: [{\n    cardId: 'feedback-form',\n    card: {\n      sections: [{\n        widgets: [\n          {\n            textInput: {\n              name: 'feedback',\n              label: 'Twój feedback',\n              type: 'MULTIPLE_LINE',\n              hintText: 'Opisz co poprawić (np. \"Zmień ton na bardziej formalny\", \"Dodaj informację o rabacie\")'\n            }\n          },\n          {\n            buttonList: {\n              buttons: [{\n                text: 'Submit Feedback',\n                onClick: {\n                  action: {\n                    function: 'submit_feedback',\n                    parameters: [{\n                      key: 'draft_id',\n                      value: $json.draft_id\n                    }]\n                  }\n                }\n              }]\n            }\n          }\n        ]\n      }]\n    }\n  }]\n}) }}",
+        "jsonBody": "={{ JSON.stringify({\n  text: '✏️ **EDYCJA DRAFTU**\\n\\nCo chcesz poprawić w drafcie?\\n\\nAktualna treść:\\n---\\n' + $json.draft_body + '\\n---',\n  cardsV2: [{\n    cardId: 'feedback-form',\n    card: {\n      sections: [{\n        widgets: [\n          {\n            textInput: {\n              name: 'feedback',\n              label: 'Twój feedback',\n              type: 'MULTIPLE_LINE',\n              hintText: 'Opisz co poprawić (np. \"Zmień ton na bardziej formalny\", \"Dodaj informację o rabacie\")'\n            }\n          },\n          {\n            buttonList: {\n              buttons: [{\n                text: 'Submit Feedback',\n                onClick: {\n                  action: {\n                    function: 'submit_feedback',\n                    parameters: [{ key: 'draft_id', value: $json.draft_id }]\n                  }\n                }\n              }]\n            }\n          }\n        ]\n      }]\n    }\n  }]\n}) }}",
         "options": {}
       },
       "name": "EDIT: Show Feedback Form",
@@ -219,8 +222,7 @@
           "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
           "name": "Google Chat OAuth2"
         }
-      },
-      "notes": "Show feedback form in Google Chat"
+      }
     },
     {
       "parameters": {
@@ -248,12 +250,11 @@
           "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
           "name": "Airtable Personal Access Token"
         }
-      },
-      "notes": "Mark draft as rejected"
+      }
     },
     {
       "parameters": {
-        "text": "=❌ **DRAFT ODRZUCONY**\n\nDo: {{ $json.email_from }}\nTemat: {{ $json.draft_subject }}\n\nOdrzucone przez: {{ $json.user_name }}",
+        "text": "=❌ **DRAFT ODRZUCONY**\n\nDo: {{ $('Get Draft from Airtable').item.json.email_from }}\nTemat: {{ $('Get Draft from Airtable').item.json.draft_subject }}\n\nOdrzucone przez: {{ $('Parse Action Data').item.json.user_name }}",
         "options": {}
       },
       "name": "REJECT: Notify",
@@ -268,8 +269,7 @@
           "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
           "name": "Google Chat OAuth2"
         }
-      },
-      "notes": "Notify team about rejection"
+      }
     },
     {
       "parameters": {
@@ -280,9 +280,9 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "draft_id": "={{ $json.draft_id }}",
-            "feedback_text": "={{ $json.raw_webhook?.commonEventObject?.formInputs?.feedback?.stringInputs?.value[0] || 'Brak danych' }}",
-            "corrected_by": "={{ $json.user_email }}"
+            "draft_id": "={{ $('Get Draft from Airtable').item.json.draft_id }}",
+            "feedback_text": "={{ $('Parse Action Data').item.json.raw_webhook?.commonEventObject?.formInputs?.feedback?.stringInputs?.value[0] || 'Brak danych' }}",
+            "corrected_by": "={{ $('Parse Action Data').item.json.user_email }}"
           }
         },
         "mode": "each"
@@ -400,7 +400,6 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "staticData": null,
   "tags": [
     {
       "name": "pipeline",
@@ -411,6 +410,5 @@
       "id": "4"
     }
   ],
-  "pinData": {},
-  "versionId": "1"
+  "pinData": {}
 }

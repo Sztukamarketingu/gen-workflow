@@ -53,33 +53,39 @@
       "name": "Execute Workflow Trigger",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
-      "position": [
-        240,
-        300
-      ]
+      "position": [240, 300],
+      "id": "trigger-context-builder"
     },
     {
       "parameters": {
-        "model": "gpt-4-turbo-preview",
-        "messages": {
-          "messageValues": [
-            {
-              "message": "=SYSTEM: Jesteś ekspertem w analizie emaili dla impresariatu koncertowego. Ekstrahuj dane, przygotuj podsumowanie i wygeneruj response_guidance – wytyczne jak odpowiadać. response_guidance MUSI być zgodny z zasadami KB.\n\n{{ $json.knowledge_context ? '**ZASADY DO STOSOWANIA (BAZA WIEDZY):**\\n' + $json.knowledge_context + '\\n\\n' : '' }}**INPUT:**\nKlasyfikacja: {{ JSON.stringify($json.classification, null, 2) }}\n\nEmail:\nOd: {{ $json.sender_email || '' }}\nTemat: {{ $json.subject || '' }}\n\nTreść:\n{{ $json.content }}\n\n{{ $json.thread_history ? 'Historia wątku:\\n' + $json.thread_history : '' }}\n\n---\n\n**ZWRÓĆ JSON:**\n\n1. **summary** - krótkie podsumowanie wątku/wiadomości (2-3 zdania)\n2. **participants** - [{email, name, role}]\n3. **artists_mentioned** - []\n4. **events_mentioned** - [{date, location, type}]\n5. **key_information** - {budget_mentioned, dates_mentioned[], requirements[], questions_asked[]}\n6. **Dane zdarzenia:** event_date (YYYY-MM-DD), event_location, event_type, budget_min, budget_max\n7. **preferred_artists** - [], **preferred_style** - null\n8. **client_name, client_email, client_phone**\n9. **is_continuation** (bool), **previous_artist_mentioned** (bool)\n10. **established_facts** - [] (co już ustalono w wątku)\n11. **missing_information** - [] (czego brakuje)\n12. **recommended_next_actions** - [] (rekomendowane kroki – źródło zadań)\n13. **response_guidance** (KRYTYCZNE):\n    - must_include: [] elementów MUSZĄCYCH być w odpowiedzi\n    - should_avoid: [] elementów których NIE pisać\n    - suggested_actions: [] konkretnych kroków\n14. **priority** - low|medium|high, **recommended_deadline** - np. \"7 dni\"\n\nUżyj null tam gdzie brak danych. Przykład formalności: response_guidance = {must_include:[\"potwierdzenie odbioru\"], should_avoid:[\"pytania o budżet\"], suggested_actions:[\"Podziękować i potwierdzić\"]}\n\n```json\n{\n  \"summary\": \"\",\n  \"participants\": [],\n  \"artists_mentioned\": [],\n  \"events_mentioned\": [],\n  \"key_information\": {\"budget_mentioned\":\"\", \"dates_mentioned\":[], \"requirements\":[], \"questions_asked\":[]},\n  \"event_date\": null,\n  \"event_location\": null,\n  \"event_type\": null,\n  \"budget_min\": null,\n  \"budget_max\": null,\n  \"preferred_artists\": [],\n  \"preferred_style\": null,\n  \"client_name\": null,\n  \"client_email\": null,\n  \"is_continuation\": false,\n  \"previous_artist_mentioned\": false,\n  \"established_facts\": [],\n  \"missing_information\": [],\n  \"recommended_next_actions\": [],\n  \"response_guidance\": {\"must_include\":[], \"should_avoid\":[], \"suggested_actions\":[]},\n  \"priority\": \"medium\",\n  \"recommended_deadline\": \"\"\n}\n```"
-            }
-          ]
+        "promptType": "define",
+        "text": "=// UWAGA: Wklej tutaj treść promptu z pliku prompts/AI_Context_Builder.txt\n// Zmienne dostępne w wyrażeniach:\n//   {{ $('Execute Workflow Trigger').first().json.content }}\n//   {{ JSON.stringify($('Execute Workflow Trigger').first().json.classification) }}\n//   {{ $('Execute Workflow Trigger').first().json.thread_history }}\n//   {{ $('Execute Workflow Trigger').first().json.subject }}\n//   {{ $('Execute Workflow Trigger').first().json.sender_email }}\n//   {{ $('Execute Workflow Trigger').first().json.knowledge_context }}\n//\n// Model zwróci czysty JSON (bez markdown) z polami kontekstowymi,\n// np.: { \"client_name\": \"...\", \"event_date\": \"...\", \"response_guidance\": { ... } }\n\nZASTĄP TEN KOMENTARZ TREŚCIĄ PROMPTU Z PLIKU prompts/AI_Context_Builder.txt"
+      },
+      "name": "AI Context Builder",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [460, 300],
+      "id": "ai-context-builder"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
         },
         "options": {
           "temperature": 0.2,
-          "maxTokens": 2500
+          "maxTokens": 2500,
+          "responseFormat": "json_object"
         }
       },
-      "name": "AI Context Builder",
-      "type": "n8n-nodes-base.openAi",
-      "typeVersion": 1,
-      "position": [
-        460,
-        300
-      ],
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [460, 500],
+      "id": "openai-model-context-builder",
       "credentials": {
         "openAiApi": {
           "id": "YOUR_OPENAI_CREDENTIAL_ID",
@@ -89,38 +95,29 @@
     },
     {
       "parameters": {
-        "jsCode": "const trigger = $('Execute Workflow Trigger').first().json;\nconst response = $input.first().json.message?.content || $input.first().json.content || '';\nconst jsonMatch = response.match(/```json\\s*\\n([\\s\\S]*?)```/);\nconst parsed = jsonMatch ? JSON.parse(jsonMatch[1].trim()) : JSON.parse(response);\nif (parsed.event_date) parsed.event_date = new Date(parsed.event_date).toISOString().split('T')[0];\nconst rg = parsed.response_guidance || {};\nif (!rg.must_include) rg.must_include = [];\nif (!rg.should_avoid) rg.should_avoid = [];\nif (!rg.suggested_actions) rg.suggested_actions = [];\nconst ctx = { ...parsed, response_guidance: rg, classification: trigger.classification };\nreturn { json: ctx };"
+        "jsCode": "const trigger = $('Execute Workflow Trigger').first().json;\n// chainLlm z JSON mode zwraca czysty JSON w polu .text — bez regex, bez fallback\nconst parsed = JSON.parse($input.first().json.text || '{}');\nif (parsed.event_date) parsed.event_date = new Date(parsed.event_date).toISOString().split('T')[0];\nconst rg = parsed.response_guidance || {};\nif (!rg.must_include) rg.must_include = [];\nif (!rg.should_avoid) rg.should_avoid = [];\nif (!rg.suggested_actions) rg.suggested_actions = [];\nconst ctx = { ...parsed, response_guidance: rg, classification: trigger.classification };\nreturn { json: ctx };"
       },
       "name": "Parse & Normalize",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        680,
-        300
-      ]
+      "position": [680, 300],
+      "id": "parse-normalize-context"
     }
   ],
   "connections": {
     "Execute Workflow Trigger": {
       "main": [
-        [
-          {
-            "node": "AI Context Builder",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "AI Context Builder", "type": "main", "index": 0 }]
       ]
     },
     "AI Context Builder": {
       "main": [
-        [
-          {
-            "node": "Parse & Normalize",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Parse & Normalize", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [{ "node": "AI Context Builder", "type": "ai_languageModel", "index": 0 }]
       ]
     }
   },
@@ -128,10 +125,7 @@
     "executionOrder": "v1"
   },
   "tags": [
-    {
-      "name": "agent",
-      "id": "1"
-    }
+    { "name": "agent", "id": "1" }
   ],
   "pinData": {}
 }

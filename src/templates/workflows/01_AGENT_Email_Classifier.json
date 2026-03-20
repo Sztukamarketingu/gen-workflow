@@ -35,35 +35,39 @@
       "name": "Execute Workflow Trigger",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,
-      "position": [
-        240,
-        300
-      ],
+      "position": [240, 300],
       "id": "trigger-classifier"
     },
     {
       "parameters": {
-        "model": "gpt-4-turbo-preview",
-        "messages": {
-          "messageValues": [
-            {
-              "message": "=Analizuj TYLKO aktualną wiadomość (treść i temat). Klasyfikuj email według intencji.\n\n**INTENT:**\n- formalnosci – umowy, faktury, przelewy, skan, przesyłam, potwierdzenie dokumentów\n- zapytanie_o_impreze – nowe zapytanie o imprezę, zespół, artystę, cenę\n- dostepnosc_artysty – pytanie o dostępność konkretnego artysty\n- wspolpraca_wykonawca – propozycja współpracy od artysty/managera\n- follow_up – kontynuacja rozmowy, przypomnienie, dopytanie\n- inne – spam, system, niejasne\n\n**SENDER_ROLE:** client | artist | partner | venue | unknown\n**DETECTED_TONE:** formal | semi_formal | informal\n**CONVERSATION_STAGE:** initial | negotiation | closing | follow_up\n**URGENCY:** low | medium | high | urgent\n\n**LABEL_ID (Gmail):**\n- Label_1164233469838029683 = Zapytanie o imprezę\n- Label_2392364100075658386 = Dostępność artysty\n- Label_7987774113567348098 = Współpraca – wykonawca\n- Label_1927380376375892524 = Formalności\n- Label_6056553363396268183 = Follow-up\n- Label_2258360176253958758 = Inne\n\n{{ $json.knowledge_context ? '**ZASADY DO STOSOWANIA:**\\n' + $json.knowledge_context + '\\n\\n' : '' }}---\n\n**EMAIL:**\nOd: {{ $json.sender_email }}\nTemat: {{ $json.subject }}\n\nTreść:\n{{ $json.content }}\n\n---\n\nZwróć TYLKO JSON (bez dodatkowego tekstu):\n\n```json\n{\n  \"intent\": \"formalnosci\",\n  \"sender_role\": \"client\",\n  \"detected_tone\": \"formal\",\n  \"conversation_stage\": \"closing\",\n  \"urgency\": \"low\",\n  \"label_id\": \"Label_1927380376375892524\",\n  \"confidence\": 0.95\n}\n```"
-            }
-          ]
+        "promptType": "define",
+        "text": "=// UWAGA: Wklej tutaj treść promptu z pliku prompts/AI_Classifier.txt\n// Zmienne dostępne w wyrażeniach:\n//   {{ $('Execute Workflow Trigger').first().json.content }}\n//   {{ $('Execute Workflow Trigger').first().json.sender_email }}\n//   {{ $('Execute Workflow Trigger').first().json.subject }}\n//   {{ $('Execute Workflow Trigger').first().json.knowledge_context }}\n//\n// Model zwróci czysty JSON (bez markdown), np.:\n// { \"intent\": \"new_inquiry\", \"sender_role\": \"organizer\", \"detected_tone\": \"semi_formal\",\n//   \"conversation_stage\": \"initial\", \"urgency\": \"medium\",\n//   \"label_id\": \"Label_2258360176253958758\", \"confidence\": 0.9 }\n\nZASTĄP TEN KOMENTARZ TREŚCIĄ PROMPTU Z PLIKU prompts/AI_Classifier.txt"
+      },
+      "name": "AI Classifier",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [460, 300],
+      "id": "ai-classifier"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
         },
         "options": {
           "temperature": 0.2,
-          "maxTokens": 800
+          "maxTokens": 800,
+          "responseFormat": "json_object"
         }
       },
-      "name": "AI Classifier",
-      "type": "n8n-nodes-base.openAi",
-      "typeVersion": 1,
-      "position": [
-        460,
-        300
-      ],
-      "id": "ai-classifier",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [460, 500],
+      "id": "openai-model-classifier",
       "credentials": {
         "openAiApi": {
           "id": "YOUR_OPENAI_CREDENTIAL_ID",
@@ -73,39 +77,29 @@
     },
     {
       "parameters": {
-        "jsCode": "const trigger = $('Execute Workflow Trigger').first().json || {};\nconst response = $input.first().json.message?.content || $input.first().json.content || '';\nconst jsonMatch = response.match(/```json\\s*\\n([\\s\\S]*?)```/);\nconst parsed = jsonMatch ? JSON.parse(jsonMatch[1].trim()) : JSON.parse(response);\nconst classification = {\n  intent: parsed.intent || 'inne',\n  sender_role: parsed.sender_role || 'unknown',\n  detected_tone: parsed.detected_tone || 'semi_formal',\n  conversation_stage: parsed.conversation_stage || 'initial',\n  urgency: parsed.urgency || 'medium',\n  label_id: parsed.label_id || 'Label_2258360176253958758',\n  confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.8\n};\nreturn { json: { ...trigger, classification } };"
+        "jsCode": "const trigger = $('Execute Workflow Trigger').first().json || {};\n// chainLlm z JSON mode zwraca czysty JSON w polu .text — bez regex, bez fallback\nconst parsed = JSON.parse($input.first().json.text || '{}');\nconst classification = {\n  intent: parsed.intent || 'inne',\n  sender_role: parsed.sender_role || 'unknown',\n  detected_tone: parsed.detected_tone || 'semi_formal',\n  conversation_stage: parsed.conversation_stage || 'initial',\n  urgency: parsed.urgency || 'medium',\n  label_id: parsed.label_id || 'Label_2258360176253958758',\n  confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.8\n};\nreturn { json: { ...trigger, classification } };"
       },
       "name": "Parse Classification",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        680,
-        300
-      ],
+      "position": [680, 300],
       "id": "parse-classifier"
     }
   ],
   "connections": {
     "Execute Workflow Trigger": {
       "main": [
-        [
-          {
-            "node": "AI Classifier",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "AI Classifier", "type": "main", "index": 0 }]
       ]
     },
     "AI Classifier": {
       "main": [
-        [
-          {
-            "node": "Parse Classification",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Parse Classification", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [{ "node": "AI Classifier", "type": "ai_languageModel", "index": 0 }]
       ]
     }
   },
@@ -113,14 +107,8 @@
     "executionOrder": "v1"
   },
   "tags": [
-    {
-      "name": "agent",
-      "id": "1"
-    },
-    {
-      "name": "classifier",
-      "id": "2"
-    }
+    { "name": "agent", "id": "1" },
+    { "name": "classifier", "id": "2" }
   ],
   "pinData": {}
 }
