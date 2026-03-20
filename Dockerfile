@@ -7,10 +7,10 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-# Generuj /version.json (commit SHA + data) – do weryfikacji deployu
-RUN GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
-    echo "{\"sha\":\"$GIT_SHA\",\"date\":\"$(date -Iseconds)\"}" > public/version.json
 RUN npm run build
+# Generuj /version.json bezpośrednio w dist (commit SHA + data)
+RUN GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
+    echo "{\"sha\":\"$GIT_SHA\",\"date\":\"$(date -Iseconds)\"}" > dist/version.json
 
 # Stage 2: Serve with nginx
 FROM nginx:alpine
