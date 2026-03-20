@@ -38,7 +38,10 @@ function App() {
               <div className="absolute inset-0 bg-gradient-to-tr from-primary-200 to-transparent opacity-50"></div>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Generator Agenta N8N</h1>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                Generator Agenta N8N
+                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-black uppercase rounded-full border border-blue-200 shadow-sm">v2</span>
+              </h1>
               <p className="text-sm text-slate-500 font-medium">Automatyczny kreator workflow</p>
             </div>
           </div>
