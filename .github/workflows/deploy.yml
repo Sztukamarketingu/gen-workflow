@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   packages: write
@@ -11,8 +14,6 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v5
 
@@ -32,16 +33,14 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/gen-workflow:latest
-            ghcr.io/${{ github.repository_owner }}/gen-workflow:${{ github.sha }}
+            ghcr.io/sztukamarketingu/gen-workflow:latest
+            ghcr.io/sztukamarketingu/gen-workflow:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v5
 
