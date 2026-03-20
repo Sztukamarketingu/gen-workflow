@@ -7,8 +7,9 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-# Timestamp przerywa cache Dockera przy każdym buildzie
-RUN echo "Build: $(date -Iseconds)" > /tmp/build-info.txt
+# Generuj /version.json (commit SHA + data) – do weryfikacji deployu
+RUN GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
+    echo "{\"sha\":\"$GIT_SHA\",\"date\":\"$(date -Iseconds)\"}" > public/version.json
 RUN npm run build
 
 # Stage 2: Serve with nginx
