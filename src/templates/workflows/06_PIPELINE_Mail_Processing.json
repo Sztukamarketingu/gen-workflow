@@ -1,5 +1,5 @@
 {
-  "name": "[PIPELINE] Mail Processing",
+  "name": "[PIPELINE] Mail Processing v2",
   "nodes": [
     {
       "parameters": {
@@ -46,7 +46,13 @@
     {
       "parameters": {
         "conditions": {
-          "boolean": [{ "value1": "={{ $json.threadId }}" }]
+          "string": [
+            {
+              "value1": "={{ $json.id }}",
+              "operation": "notEqual",
+              "value2": "={{ $json.threadId }}"
+            }
+          ]
         }
       },
       "name": "IF Has Thread",
@@ -116,7 +122,7 @@
           "__rl": true,
           "value": "ZASTĄP_ID_WORKFLOW_01_CLASSIFIER",
           "mode": "list",
-          "cachedResultName": "[AGENT] Email Classifier"
+          "cachedResultName": "[AGENT] Email Classifier v2"
         },
         "workflowInputs": {
           "mappingMode": "defineBelow",
@@ -357,7 +363,7 @@
           "__rl": true,
           "value": "ZASTĄP_ID_WORKFLOW_03_RESPONSE_GENERATOR",
           "mode": "list",
-          "cachedResultName": "[AGENT] Response Generator"
+          "cachedResultName": "[AGENT] Response Generator v2"
         },
         "workflowInputs": {
           "mappingMode": "defineBelow",

@@ -1,37 +1,8 @@
 {
-  "name": "[AGENT] Email Classifier",
+  "name": "[AGENT] Email Classifier v2",
   "nodes": [
     {
-      "parameters": {
-        "workflowInputs": {
-          "schema": [
-            {
-              "name": "content",
-              "type": "string",
-              "displayName": "Email Content",
-              "required": true
-            },
-            {
-              "name": "sender_email",
-              "type": "string",
-              "displayName": "Sender Email",
-              "required": true
-            },
-            {
-              "name": "subject",
-              "type": "string",
-              "displayName": "Subject",
-              "required": true
-            },
-            {
-              "name": "knowledge_context",
-              "type": "string",
-              "displayName": "Knowledge Base (reguły)",
-              "required": false
-            }
-          ]
-        }
-      },
+      "parameters": {},
       "name": "Execute Workflow Trigger",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,

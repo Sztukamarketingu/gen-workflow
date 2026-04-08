@@ -2,54 +2,7 @@
   "name": "[AGENT] Context Builder",
   "nodes": [
     {
-      "parameters": {
-        "workflowInputs": {
-          "schema": [
-            {
-              "name": "content",
-              "type": "string",
-              "displayName": "Email Content",
-              "required": true
-            },
-            {
-              "name": "classification",
-              "type": "json",
-              "displayName": "Classification Result",
-              "required": true
-            },
-            {
-              "name": "thread_history",
-              "type": "string",
-              "displayName": "Thread History",
-              "required": false
-            },
-            {
-              "name": "subject",
-              "type": "string",
-              "displayName": "Subject",
-              "required": false
-            },
-            {
-              "name": "sender_email",
-              "type": "string",
-              "displayName": "Sender Email",
-              "required": false
-            },
-            {
-              "name": "knowledge_context",
-              "type": "string",
-              "displayName": "Knowledge Base (reguły)",
-              "required": false
-            },
-            {
-              "name": "existing_task",
-              "type": "json",
-              "displayName": "Existing Task Data",
-              "required": false
-            }
-          ]
-        }
-      },
+      "parameters": {},
       "name": "Execute Workflow Trigger",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,

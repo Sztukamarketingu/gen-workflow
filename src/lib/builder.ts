@@ -2,8 +2,7 @@ import workflow01 from '../templates/workflows/01_AGENT_Email_Classifier.json';
 import workflow02 from '../templates/workflows/02_AGENT_Context_Builder.json';
 import workflow03 from '../templates/workflows/03_AGENT_Response_Generator.json';
 import workflow06 from '../templates/workflows/06_PIPELINE_Mail_Processing.json';
-import workflow10 from '../templates/workflows/10_PIPELINE_Approval_Handler.json';
-import workflow11 from '../templates/workflows/11_WORKFLOW_Feedback_Loop.json';
+import workflow10 from '../templates/workflows/10_PIPELINE_Chat_Feedback_Approval.json';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -12,8 +11,7 @@ const templates: Record<string, any> = {
     '02_AGENT_Context_Builder.json': workflow02,
     '03_AGENT_Response_Generator.json': workflow03,
     '06_PIPELINE_Mail_Processing.json': workflow06,
-    '10_PIPELINE_Approval_Handler.json': workflow10,
-    '11_WORKFLOW_Feedback_Loop.json': workflow11,
+    '10_PIPELINE_Chat_Feedback_Approval.json': workflow10,
 };
 
 // ─── Config Builder ───────────────────────────────────────────────────────────
@@ -218,6 +216,15 @@ return { json: Object.assign({}, item, { draft: Object.assign({}, draft, { draft
 function injectWorkflow06(wf: any, config: any): void {
     const nodes = wf.nodes;
 
+    // Gmail Trigger — optional sender filter (matches production: skupia trigger na skrzynce)
+    const gmailTrigger = findNode(nodes, 'Gmail Trigger');
+    if (gmailTrigger?.parameters?.filters) {
+        const inbox = String(config.channels?.email_inbox_address || '').trim();
+        if (inbox) {
+            gmailTrigger.parameters.filters.sender = inbox;
+        }
+    }
+
     // Load Knowledge — replace KB
     const loadKnowledge = findNode(nodes, 'Load Knowledge');
     if (loadKnowledge) {
@@ -328,99 +335,49 @@ function injectWorkflow06(wf: any, config: any): void {
     }
 }
 
-// ─── Inject Workflow 10 ───────────────────────────────────────────────────────
+// ─── Inject Workflow 10 — Chat Feedback & Approval (jeden pipeline zamiast 10+11) ─
 
-function injectWorkflow10(wf: any, config: any): void {
-    const nodes = wf.nodes;
+function injectWorkflow10Chat(wf: any, config: any): void {
+    const nodes = wf.nodes || [];
     const baseId = config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX';
-    const spaceId = config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID';
+    let spaceId = String(config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID').trim();
+    if (spaceId && !spaceId.startsWith('spaces/')) {
+        spaceId = `spaces/${spaceId.replace(/^spaces\//, '')}`;
+    }
     const prefix = (config.channels?.webhook_prefix || 'agent').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 
-    // Webhook path
-    const webhookNode = findNode(nodes, 'Google Chat Action Webhook');
+    const webhookNode = findNode(nodes, 'Webhook Chat Feedback');
     if (webhookNode) {
         webhookNode.parameters.path = `${prefix}-approval`;
-        webhookNode.webhookId = `${prefix}-approval-webhook`;
+        webhookNode.webhookId = `${prefix}-chat-feedback-webhook`;
     }
 
-    // Airtable base ID in all nodes
     nodes.forEach((node: any) => {
-        if (node.type === 'n8n-nodes-base.airtable' && node.parameters?.base) {
-            node.parameters.base = baseId;
+        if (node.type === 'n8n-nodes-base.airtable') {
+            const b = node.parameters?.base;
+            if (b && typeof b === 'object' && b.__rl && 'value' in b) {
+                b.value = baseId;
+            } else if (typeof b === 'string') {
+                node.parameters.base = baseId;
+            }
+        }
+        if (node.type === 'n8n-nodes-base.googleChat' && node.parameters?.spaceId !== undefined) {
+            node.parameters.spaceId = spaceId;
         }
     });
 
-    // APPROVE: Send Gmail — add HTML formatting
-    const sendGmail = findNode(nodes, 'APPROVE: Send Gmail');
-    if (sendGmail) {
-        sendGmail.parameters.message = "={{ ('<p>' + ($json.draft_body || '')).split('\\n\\n').join('</p><p>').split('\\n').join('<br>') + '</p>' }}";
-        if (!sendGmail.parameters.options) sendGmail.parameters.options = {};
-        sendGmail.parameters.options.bodyContentType = 'html';
+    const execCorr = findNode(nodes, 'Execute Correction');
+    if (execCorr?.parameters?.workflowId) {
+        Object.assign(execCorr.parameters.workflowId, {
+            __rl: true,
+            value: 'ZASTĄP_ID_WORKFLOW_03_RESPONSE_GENERATOR',
+            mode: 'list',
+            cachedResultName: '[AGENT] Response Generator v2'
+        });
     }
-
-    // EDIT: Show Feedback Form — inject space URL
-    const editNode = findNode(nodes, 'EDIT: Show Feedback Form');
-    if (editNode) {
-        editNode.parameters.url = `https://chat.googleapis.com/v1/${spaceId}/messages`;
-    }
-
-    // Fix optional chaining in Parse Action Data
-    const parseNode = findNode(nodes, 'Parse Action Data');
-    if (parseNode && parseNode.parameters?.jsCode) {
-        parseNode.parameters.jsCode = parseNode.parameters.jsCode.replace(/\?\./g, ' && (') + ')';
-        // Use a cleaner replacement
-        parseNode.parameters.jsCode = `const webhook = $input.first().json;
-const action = (webhook.action && webhook.action.function) || (webhook.commonEventObject && webhook.commonEventObject.invokedFunction) || 'unknown';
-const params = (webhook.action && webhook.action.parameters) || (webhook.commonEventObject && webhook.commonEventObject.parameters) || [];
-let draft_id;
-if (Array.isArray(params)) {
-  const draftParam = params.find(function(p) { return p.key === 'draft_id'; });
-  draft_id = draftParam && draftParam.value;
-} else {
-  draft_id = params.draft_id;
-}
-const user_email = (webhook.user && webhook.user.email) || (webhook.user && webhook.user.name) || 'unknown';
-const user_name = (webhook.user && webhook.user.displayName) || (webhook.user && webhook.user.name) || 'Unknown User';
-return {
-  json: {
-    action: action.replace('_draft', ''),
-    draft_id: draft_id,
-    user_email: user_email,
-    user_name: user_name,
-    raw_webhook: webhook
-  }
-};`;
-    }
-
-    // Fix optional chaining in EDIT: Call Feedback Loop workflowInputs
-    const feedbackLoopNode = findNode(nodes, 'EDIT: Call Feedback Loop');
-    if (feedbackLoopNode) {
-        const vals = (feedbackLoopNode.parameters?.workflowInputs?.value) || {};
-        if (vals.feedback_text && vals.feedback_text.includes('?.')) {
-            const base = "(($('Parse Action Data').item || {}).json || {}).raw_webhook || {}";
-            vals.feedback_text = `={{ (((((${base}).commonEventObject || {}).formInputs || {}).feedback || {}).stringInputs || {}).value || [])[0] || 'Brak danych' }}`;
-        }
-    }
-}
-
-// ─── Inject Workflow 11 ───────────────────────────────────────────────────────
-
-function injectWorkflow11(wf: any, config: any): void {
-    const nodes = wf.nodes;
-    const baseId = config.channels?.airtable_base_id || 'appXXXXXXXXXXXXXX';
-    const spaceId = config.channels?.google_chat_space_id || 'spaces/YOUR_SPACE_ID';
-
-    // Airtable base ID in all airtable nodes
-    nodes.forEach((node: any) => {
-        if (node.type === 'n8n-nodes-base.airtable' && node.parameters?.base) {
-            node.parameters.base = baseId;
-        }
-    });
-
-    // Send Updated Draft for Approval — inject space URL
-    const sendNode = findNode(nodes, 'Send Updated Draft for Approval');
-    if (sendNode) {
-        sendNode.parameters.url = `https://chat.googleapis.com/v1/${spaceId}/messages`;
+    if (execCorr?.parameters?.workflowInputs?.value?.tone) {
+        execCorr.parameters.workflowInputs.value.tone =
+            "={{ ($('Build Correction Context').item.json.classification || {}).detected_tone || 'semi_formal' }}";
     }
 }
 
@@ -588,11 +545,8 @@ export async function generateWorkflows(config: any) {
         if (filename.includes('06_PIPELINE')) {
             injectWorkflow06(wf, config);
         }
-        if (filename.includes('10_PIPELINE')) {
-            injectWorkflow10(wf, config);
-        }
-        if (filename.includes('11_WORKFLOW')) {
-            injectWorkflow11(wf, config);
+        if (filename.includes('10_PIPELINE_Chat')) {
+            injectWorkflow10Chat(wf, config);
         }
 
         generatedWorkflows[filename] = wf;
@@ -643,8 +597,7 @@ export function generateInstallerPrompt(config: any): string {
         '02_AGENT_Context_Builder.json',
         '03_AGENT_Response_Generator.json',
         '06_PIPELINE_Mail_Processing.json',
-        '10_PIPELINE_Approval_Handler.json',
-        '11_WORKFLOW_Feedback_Loop.json'
+        '10_PIPELINE_Chat_Feedback_Approval.json'
     ];
 
     const approvalNote = approvalChannel === 'google_chat'
@@ -754,13 +707,17 @@ Oraz drugą tabelę **\`Draft_Corrections\`** z kolumnami:
 
 ## KROK 5: Import Workflows do n8n przez API
 
-Teraz wgrasz wszystkie 6 plików JSON do n8n bezpośrednio przez REST API.
+Teraz wgrasz wszystkie 5 plików JSON do n8n bezpośrednio przez REST API.
 
 1. Powiedz: *„Importuję Twoje workflow do n8n!"*
 2. Odczytaj \`N8N_HOST\` i \`N8N_API_KEY\` z pliku \`.env\`.
 3. Importuj pliki z folderu \`workflows/\` w **ściśle określonej kolejności** (AGENT-y przed PIPELINE-ami):
 
 ${workflowFiles.map((f, i) => `   ${i + 1}. \`${f}\``).join('\n')}
+
+3b. **Nazwy workflow w n8n po imporcie** (ważne dla nodeów *Execute Workflow* / łączenia po nazwie):
+   - \`[AGENT] Email Classifier v2\`, \`[AGENT] Context Builder\`, \`[AGENT] Response Generator v2\`
+   - \`[PIPELINE] Mail Processing v2\`, \`[PIPELINE] Chat Feedback & Approval\`
 
 4. Dla każdego pliku wykonaj import przez API n8n:
 \`\`\`bash
@@ -771,7 +728,7 @@ curl -s -X POST "$N8N_HOST/api/v1/workflows" \\
 \`\`\`
    Zapisz **ID** każdego zaimportowanego workflow (pole \`"id"\` w odpowiedzi JSON).
 
-5. Po imporcie wszystkich 6 plików zaktualizuj węzły **Execute Workflow** w pipeline'ach (06, 10, 11) tak, aby odwoływały się do poprawnych ID nowo zaimportowanych sub-agentów (01, 02, 03). Użyj:
+5. Po imporcie wszystkich 5 plików zaktualizuj węzły **Execute Workflow** w pipeline'ach (06 Mail, 10 Chat) tak, aby odwoływały się do poprawnych ID nowo zaimportowanych sub-agentów (01, 02, 03). Użyj:
 \`\`\`bash
 curl -s -X PATCH "$N8N_HOST/api/v1/workflows/ID_PIPELINE" \\
   -H "X-N8N-API-KEY: $N8N_API_KEY" \\
@@ -903,20 +860,19 @@ export function generateArtifacts(config: any) {
 
 ## Architektura systemu
 - **3 agenty AI**: Klasyfikator, Context Builder, Generator odpowiedzi
-- **3 pipeline'y**: Mail Processing, Approval Handler, Feedback Loop
+- **2 pipeline'y**: Mail Processing v2, Chat Feedback & Approval (webhook + korekty + zatwierdzenie)
 - **Storage**: Airtable (tabela Draft_Queue)
 - **Kanał akceptacji**: ${config.channels?.approval_channel || 'none'}
 
 ## Webhook URL
-Approval Handler nasłuchuje na: \`/webhook/${prefix}-approval\`
+Chat Feedback & Approval nasłuchuje na: \`/webhook/${prefix}-approval\`
 
 ## Kolejność importu workflows (OBOWIĄZKOWA)
 1. 01_AGENT_Email_Classifier.json
 2. 02_AGENT_Context_Builder.json
 3. 03_AGENT_Response_Generator.json
 4. 06_PIPELINE_Mail_Processing.json
-5. 10_PIPELINE_Approval_Handler.json
-6. 11_WORKFLOW_Feedback_Loop.json
+5. 10_PIPELINE_Chat_Feedback_Approval.json
 
 ## Intencje skonfigurowane
 ${(config.intents || []).map((i: any) => `- **${i.route_key}**: ${i.description} (${i.requires_approval ? 'wymaga akceptacji' : 'bez akceptacji'})`).join('\n')}

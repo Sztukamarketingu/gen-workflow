@@ -1,62 +1,8 @@
 {
-  "name": "[AGENT] Response Generator",
+  "name": "[AGENT] Response Generator v2",
   "nodes": [
     {
-      "parameters": {
-        "workflowInputs": {
-          "schema": [
-            {
-              "name": "template_type",
-              "type": "string",
-              "displayName": "Template Type",
-              "required": true
-            },
-            {
-              "name": "context",
-              "type": "json",
-              "displayName": "Context Data",
-              "required": true
-            },
-            {
-              "name": "response_guidance",
-              "type": "json",
-              "displayName": "Response Guidance",
-              "required": false
-            },
-            {
-              "name": "artists",
-              "type": "json",
-              "displayName": "Artists Data",
-              "required": false
-            },
-            {
-              "name": "tone",
-              "type": "string",
-              "displayName": "Tone",
-              "required": false,
-              "default": "semi_formal"
-            },
-            {
-              "name": "previous_draft",
-              "type": "string",
-              "displayName": "Previous Draft (for corrections)",
-              "required": false
-            },
-            {
-              "name": "correction_feedback",
-              "type": "string",
-              "displayName": "Correction Feedback",
-              "required": false
-            },
-            {
-              "name": "knowledge_context",
-              "type": "string",
-              "displayName": "Knowledge Base (reguły)",
-              "required": false
-            }
-          ]
-        }
-      },
+      "parameters": {},
       "name": "Execute Workflow Trigger",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1,

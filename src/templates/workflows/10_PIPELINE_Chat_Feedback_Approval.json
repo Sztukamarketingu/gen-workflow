@@ -1,0 +1,1450 @@
+{
+  "name": "[PIPELINE] Chat Feedback & Approval",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "google-chat-approval",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Chat Feedback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "chat-feedback-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst eventType = body.type || '';\n\n// Ignore system events (REST API format)\nif ([\"ADDED_TO_SPACE\", \"VERIFICATION\", \"REMOVED_FROM_SPACE\"].includes(eventType)) {\n  return [{ json: { command_type: \"ignore\", message_text: \"\", timestamp: new Date().toISOString() } }];\n}\n\n// Support both Google Chat App (REST API) and Google Workspace Add-on (GCAA) formats\n// REST API: message at body.message\n// Add-on:   message at body.chat.messagePayload.message\nconst chatMessage = body.message || body.chat?.messagePayload?.message || {};\nconst chatUser = body.user || body.chat?.user || {};\nconst chatSpace = body.space || body.chat?.messagePayload?.space || {};\n\n// Ignore bot messages (prevent echo loop)\nconst senderType = chatMessage.sender?.type || chatUser.type || \"\";\nif (senderType === \"BOT\") {\n  return [{ json: { command_type: \"ignore\", message_text: \"\", timestamp: new Date().toISOString() } }];\n}\n\n// Also ignore if no message (ping/verification)\nif (!chatMessage || Object.keys(chatMessage).length === 0) {\n  return [{ json: { command_type: \"ignore\", message_text: \"\", timestamp: new Date().toISOString() } }];\n}\n\n// argumentText = text WITHOUT @mention prefix (user typed after @Asystent)\nconst message = (chatMessage.argumentText || chatMessage.text || \"\").trim();\nconst msgLower = message.toLowerCase();\n\nconst approvalKeywords = [\"ok\", \"wyślij\", \"wyslij\", \"zatwierdź\", \"zatwierdz\", \"zatwierdzam\", \"send\", \"approve\", \"tak\", \"dobrze\"];\nconst rejectKeywords = [\"odrzuć\", \"odrzuc\", \"anuluj\", \"nie\", \"reject\"];\n\nconst isApproval = approvalKeywords.some(kw => msgLower === kw || msgLower === kw + \"!\" || msgLower === kw + \".\");\nconst isReject = rejectKeywords.some(kw => msgLower === kw || msgLower === kw + \"!\" || msgLower === kw + \".\");\n\nlet command_type = \"ignore\";\nif (isApproval) command_type = \"approval\";\nelse if (isReject) command_type = \"rejection\";\nelse if (message.length > 2) command_type = \"correction\";\n\nreturn [{\n  json: {\n    command_type,\n    message_text: message,\n    message_id: chatMessage.name || \"\",\n    user: chatMessage.sender?.displayName || chatUser.displayName || \"\",\n    space: chatSpace.name || \"\",\n    thread_name: chatMessage.thread?.name || \"\",\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-command",
+      "name": "Parse Command Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app5NIUbshNL31ylr"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblfO6Og3y984iELe",
+          "mode": "list",
+          "cachedResultName": "Draft_Queue",
+          "cachedResultUrl": "https://airtable.com/app5NIUbshNL31ylr/tblfO6Og3y984iELe"
+        },
+        "filterByFormula": "={{ \"AND({chat_thread_id} = '\" + $('Parse Command Type').item.json.thread_name + \"', OR({status} = 'pending_approval', {status} = 'revision'))\" }}",
+        "returnAll": false,
+        "limit": 1,
+        "options": {},
+        "sort": {
+          "property": [
+            {
+              "field": "created_at",
+              "direction": "desc"
+            }
+          ]
+        }
+      },
+      "id": "get-draft-correction",
+      "name": "Get Pending Draft (Correction)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        752,
+        160
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const draft = $input.first().json;\nconst command = $('Parse Command Type').first().json;\n\nlet context = {};\nlet classification = {};\nlet responseGuidance = {};\ntry { context = JSON.parse(draft.context || '{}'); } catch(e) {}\ntry { classification = JSON.parse(draft.classification || '{}'); } catch(e) {}\n// response_guidance is now stored inside context\ntry { responseGuidance = context.response_guidance || {}; } catch(e) {}\n\nlet existingCorrections = [];\ntry { existingCorrections = JSON.parse(draft.corrections_history || '[]'); } catch(e) {}\n\nconst newCorrection = {\n  correction_number: existingCorrections.length + 1,\n  feedback_text: command.message_text,\n  timestamp: command.timestamp,\n  user: command.user\n};\n\nreturn [{\n  json: {\n    airtable_record_id: draft.id,\n    draft_id: draft.draft_id || '',\n    original_draft_subject: draft.draft_subject || '',\n    current_draft_body: draft.draft_body || '',\n    original_draft_body: draft.original_draft_body || draft.draft_body || '',\n    email_from: draft.email_from || '',\n    email_subject: draft.email_subject || '',\n    email_context: context,\n    classification: classification,\n    response_guidance: responseGuidance,\n    correction_feedback: command.message_text,\n    corrections_history: [...existingCorrections, newCorrection],\n    edit_count: (parseInt(draft.edit_count) || 0) + 1,\n    gmail_draft_id: draft.draft_gmail_id || '',\n    email_thread_id: draft.email_thread_id || '',\n    knowledge_context: context.knowledge_context || ''\n  }\n}];"
+      },
+      "id": "build-correction-context",
+      "name": "Build Correction Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// This node prepares data for the Response Generator sub-workflow\n// For now, we build a correction prompt that will be passed to AI\nconst ctx = $input.first().json;\n\nreturn [{\n  json: {\n    ...ctx,\n    ai_prompt: `Jesteś asystentem impresariatu koncertowego. Masz poprawić poniższy draft odpowiedzi mailowej zgodnie z instrukcją użytkownika.\\n\\nAKTUALNY DRAFT:\\n${ctx.current_draft_body}\\n\\nINSTRUKCJA KOREKTY:\\n${ctx.correction_feedback}\\n\\nKONTEKST MAILA:\\nOd: ${ctx.email_from}\\nTemat: ${ctx.email_subject}\\n\\nZwróć TYLKO poprawioną treść maila, bez dodatkowych komentarzy.`\n  }\n}];"
+      },
+      "id": "apply-correction-ai",
+      "name": "Apply Correction with AI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ZASTĄP_ID_WORKFLOW_03_RESPONSE_GENERATOR",
+          "mode": "list",
+          "cachedResultName": "[AGENT] Response Generator v2"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "template_type": "={{ $('Build Correction Context').item.json.route_intent || 'new_inquiry' }}",
+            "context": "={{ JSON.stringify($('Build Correction Context').item.json) }}",
+            "tone": "={{ ($('Build Correction Context').item.json.classification || {}).detected_tone || 'semi_formal' }}",
+            "previous_draft": "={{ $('Build Correction Context').item.json.current_draft_body || '' }}",
+            "correction_feedback": "={{ $('Build Correction Context').item.json.correction_feedback || '' }}",
+            "knowledge_context": "={{ $('Build Correction Context').item.json.knowledge_context || '' }}",
+            "response_guidance": "={{ $('Build Correction Context').item.json.response_guidance || {} }}"
+          }
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "id": "execute-correction",
+      "name": "Execute Correction",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1712,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const corrected = $input.first().json;\nconst ctx = $('Build Correction Context').first().json;\n\n// Get corrected body from Response Generator output\nconst correctedBody = corrected.draft_body || corrected.response || corrected.text || ctx.current_draft_body;\n\n// Convert to HTML\nconst htmlBody = correctedBody\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .split('\\n\\n')\n  .map(p => `<p>${p.replace(/\\n/g, '<br>')}</p>`)\n  .join('');\n\nreturn [{\n  json: {\n    ...ctx,\n    corrected_draft_body: correctedBody,\n    corrected_draft_body_html: htmlBody,\n    corrected_draft_subject: ctx.original_draft_subject\n  }\n}];"
+      },
+      "id": "prepare-corrected-draft",
+      "name": "Prepare Corrected Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "operation": "deleteDraft"
+      },
+      "id": "delete-old-draft",
+      "name": "Delete Old Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2208,
+        160
+      ],
+      "webhookId": "24549aaf-68e0-4998-84fb-33ca850f7199",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $('Prepare Corrected Draft').item.json.corrected_draft_subject }}",
+        "message": "={{ $('Prepare Corrected Draft').item.json.corrected_draft_body }}",
+        "options": {
+          "sendTo": "={{ $('Prepare Corrected Draft').item.json.email_from }}"
+        }
+      },
+      "id": "create-new-draft",
+      "name": "Create New Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2464,
+        160
+      ],
+      "webhookId": "149e28f4-e73d-421e-84c2-07ddc4c7ed61",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app5NIUbshNL31ylr"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblfO6Og3y984iELe",
+          "mode": "list",
+          "cachedResultName": "Draft_Queue",
+          "cachedResultUrl": "https://airtable.com/app5NIUbshNL31ylr/tblfO6Og3y984iELe"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $('Build Correction Context').item.json.airtable_record_id }}",
+            "draft_body": "={{ $('Prepare Corrected Draft').item.json.corrected_draft_body }}",
+            "draft_subject": "={{ $('Prepare Corrected Draft').item.json.corrected_draft_subject }}",
+            "draft_gmail_id": "={{ $('Create New Gmail Draft').item.json.id || '' }}",
+            "edit_count": "={{ String($('Build Correction Context').item.json.edit_count || 1) }}",
+            "status": "pending_approval"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "draft_id",
+              "displayName": "draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_id",
+              "displayName": "email_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_thread_id",
+              "displayName": "email_thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_from",
+              "displayName": "email_from",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_subject",
+              "displayName": "email_subject",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "draft_subject",
+              "displayName": "draft_subject",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "draft_body",
+              "displayName": "draft_body",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "draft_gmail_id",
+              "displayName": "draft_gmail_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "classification",
+              "displayName": "classification",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "context",
+              "displayName": "context",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "approved_by",
+              "displayName": "approved_by",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "edit_count",
+              "displayName": "edit_count",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_snipet",
+              "displayName": "email_snipet",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "update-airtable-correction",
+      "name": "Update Airtable (Correction)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        160
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app5NIUbshNL31ylr"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblfO6Og3y984iELe",
+          "mode": "list",
+          "cachedResultName": "Draft_Queue",
+          "cachedResultUrl": "https://airtable.com/app5NIUbshNL31ylr/tblfO6Og3y984iELe"
+        },
+        "filterByFormula": "={{ \"AND({chat_thread_id} = '\" + $('Parse Command Type').item.json.thread_name + \"', OR({status} = 'pending_approval', {status} = 'revision'))\" }}",
+        "returnAll": false,
+        "limit": 1,
+        "options": {},
+        "sort": {
+          "property": [
+            {
+              "field": "created_at",
+              "direction": "desc"
+            }
+          ]
+        }
+      },
+      "id": "get-draft-approval",
+      "name": "Get Pending Draft (Approval)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        752,
+        512
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const draft = $('Get Pending Draft (Approval)').first().json;\n\nlet context = {};\nlet classification = {};\nlet correctionsHistory = [];\ntry { context = JSON.parse(draft.context || '{}'); } catch(e) {}\ntry { classification = JSON.parse(draft.classification || '{}'); } catch(e) {}\ntry { correctionsHistory = JSON.parse(draft.corrections_history || '[]'); } catch(e) {}\n\n// Extract clean email address\nconst fromText = draft.email_from || '';\nconst emailMatch = fromText.match(/<([^>]+)>/);\nconst cleanEmail = (emailMatch && emailMatch[1]) ? emailMatch[1] : fromText.replace(/^\"|\"$/g, '').trim();\n\nreturn [{\n  json: {\n    airtable_record_id: draft.id,\n    draft_id: draft.draft_id || '',\n    gmail_draft_id: draft.draft_gmail_id || '',\n    email_thread_id: draft.email_thread_id || '',\n    email_from: draft.email_from || '',\n    email_from_clean: cleanEmail,\n    email_subject: draft.email_subject || '',\n    final_draft_subject: draft.draft_subject || '',\n    final_draft_body: draft.draft_body || '',\n    original_draft_body: draft.original_draft_body || draft.draft_body || '',\n    corrections_count: correctionsHistory.length,\n    corrections_history: correctionsHistory,\n    email_context: context,\n    classification: classification,\n    edit_count: parseInt(draft.edit_count) || 0,\n    had_corrections: correctionsHistory.length > 0\n  }\n}];"
+      },
+      "id": "prepare-send-data",
+      "name": "Prepare Send Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Prepare Send Data').item.json.email_from_clean || $('Prepare Send Data').item.json.email_from }}",
+        "subject": "={{ $('Prepare Send Data').item.json.final_draft_subject }}",
+        "message": "={{ $('Prepare Send Data').item.json.final_draft_body }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1264,
+        512
+      ],
+      "webhookId": "bf838a72-84f8-4bc0-9e13-d9f59b800218",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "operation": "deleteDraft"
+      },
+      "id": "delete-draft-after-send",
+      "name": "Delete Draft After Send",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1504,
+        512
+      ],
+      "webhookId": "dba14b2b-e9c2-488c-b16a-3ea8aa1e0f8c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Prepare Send Data').first().json;\n\nconst embeddingText = [\n  `Email od: ${data.email_from}`,\n  `Temat: ${data.email_subject}`,\n  `Intent: ${data.classification?.intent || 'unknown'}`,\n  `Ton: ${data.classification?.detected_tone || 'unknown'}`,\n  `Rola nadawcy: ${data.classification?.sender_role || 'unknown'}`,\n  '',\n  'Pierwotny draft AI:',\n  data.original_draft_body,\n  '',\n  data.corrections_count > 0 ? `Poprawki (${data.corrections_count}):` : '',\n  data.corrections_count > 0 ? data.corrections_history.map((c, i) => `${i+1}. ${c.feedback_text}`).join('\\n') : '',\n  '',\n  'Zatwierdzona wersja:',\n  data.final_draft_body\n].filter(Boolean).join('\\n').trim();\n\nreturn [{\n  json: {\n    ...data,\n    embedding_text: embeddingText,\n    pinecone_metadata: {\n      draft_id: data.draft_id,\n      intent: data.classification?.intent || '',\n      sender_role: data.classification?.sender_role || '',\n      tone: data.classification?.detected_tone || '',\n      corrections_count: data.corrections_count,\n      edit_count: data.edit_count,\n      timestamp: new Date().toISOString(),\n      event_type: data.email_context?.event_type || '',\n      had_corrections: data.had_corrections,\n      original_draft: (data.original_draft_body || '').substring(0, 500),\n      final_draft: (data.final_draft_body || '').substring(0, 500),\n      corrections_summary: data.corrections_history.map(c => c.feedback_text).join(' | ').substring(0, 300)\n    }\n  }\n}];"
+      },
+      "id": "prepare-embedding",
+      "name": "Prepare Embedding Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: $json.embedding_text }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "generate-embedding",
+      "name": "Generate Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        512
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PINECONE_HOST/vectors/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Impresariatcc",
+              "value": "pcsk_3d7xP2_JdASbcMayBnkZ2b5Ai6oBXvJYAFriEc2SEJpLidUeN8s1pYFQ3jtnM5nKif72oE"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ vectors: [{ id: $('Prepare Embedding Data').item.json.draft_id, values: $json.data[0].embedding, metadata: $('Prepare Embedding Data').item.json.pinecone_metadata }], namespace: 'email_drafts' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "store-pinecone",
+      "name": "Store in Pinecone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2256,
+        512
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app5NIUbshNL31ylr"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblfO6Og3y984iELe",
+          "mode": "list",
+          "cachedResultName": "Draft_Queue",
+          "cachedResultUrl": "https://airtable.com/app5NIUbshNL31ylr/tblfO6Og3y984iELe"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $('Prepare Send Data').item.json.airtable_record_id }}",
+            "status": "sent",
+            "approved_at": "={{ new Date().toISOString() }}",
+            "sent_at": "={{ new Date().toISOString() }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "draft_id",
+              "displayName": "draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_id",
+              "displayName": "email_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_thread_id",
+              "displayName": "email_thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_from",
+              "displayName": "email_from",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_subject",
+              "displayName": "email_subject",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "draft_subject",
+              "displayName": "draft_subject",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "draft_body",
+              "displayName": "draft_body",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "draft_gmail_id",
+              "displayName": "draft_gmail_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "classification",
+              "displayName": "classification",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "context",
+              "displayName": "context",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "approved_by",
+              "displayName": "approved_by",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "edit_count",
+              "displayName": "edit_count",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_snipet",
+              "displayName": "email_snipet",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "update-airtable-approval",
+      "name": "Update Airtable (Approved)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        2512,
+        512
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "spaceId": "spaces/AAQAuUSheK4",
+        "messageUi": {
+          "text": "={{ 'Zaktualizowany draft (edycja #' + $('Build Correction Context').item.json.edit_count + '):\\n\\n--- Temat ---\\n' + $('Prepare Corrected Draft').item.json.corrected_draft_subject + '\\n\\n--- Treść ---\\n' + $('Prepare Corrected Draft').item.json.corrected_draft_body + '\\n\\nMożesz dalej poprawiać lub napisz \"OK\" aby zatwierdzić i wysłać.' }}"
+        },
+        "additionalFields": {}
+      },
+      "id": "send-corrected-to-chat",
+      "name": "Send Corrected Draft to Chat",
+      "type": "n8n-nodes-base.googleChat",
+      "typeVersion": 1,
+      "position": [
+        2960,
+        160
+      ],
+      "webhookId": "dc1c4f2a-da60-4a54-bc3e-eed2a192301c",
+      "credentials": {
+        "googleChatOAuth2Api": {
+          "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
+          "name": "Google Chat OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "spaceId": "spaces/AAQAuUSheK4",
+        "messageUi": {
+          "text": "={{ '✅ Email wysłany!\\n\\nDo: ' + $('Prepare Send Data').item.json.email_from + '\\nTemat: ' + $('Prepare Send Data').item.json.final_draft_subject + '\\n\\n' + ($('Prepare Send Data').item.json.corrections_count > 0 ? 'Zapisano ' + $('Prepare Send Data').item.json.corrections_count + ' poprawek do bazy wiedzy.' : 'Draft wysłany bez zmian.') }}"
+        },
+        "additionalFields": {}
+      },
+      "id": "send-confirmation-to-chat",
+      "name": "Send Confirmation to Chat",
+      "type": "n8n-nodes-base.googleChat",
+      "typeVersion": 1,
+      "position": [
+        2752,
+        512
+      ],
+      "webhookId": "d9859b51-b74d-4849-b2d9-3b64eac15cfb",
+      "credentials": {
+        "googleChatOAuth2Api": {
+          "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
+          "name": "Google Chat OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.command_type }}",
+              "rightValue": "correction",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-correction",
+      "name": "IF Correction",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        512,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.command_type }}",
+              "rightValue": "approval",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-approval",
+      "name": "IF Approval",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        656
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8b4f16a9-1bec-47d6-a043-cef7142ff834",
+      "name": "IF Draft Matched (Exact)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "app5NIUbshNL31ylr"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblfO6Og3y984iELe",
+          "mode": "list",
+          "cachedResultName": "Draft_Queue",
+          "cachedResultUrl": "https://airtable.com/app5NIUbshNL31ylr/tblfO6Og3y984iELe"
+        },
+        "filterByFormula": "={{ \"AND(OR({status}='pending_approval', {status}='revision'), FIND('\" + String($('Parse Command Type').item.json.space || '').replace(/'/g, \"\\\\'\") + \"', {chat_thread_id})>0)\" }}",
+        "returnAll": false,
+        "limit": 1,
+        "options": {},
+        "sort": {
+          "property": [
+            {
+              "field": "created_at",
+              "direction": "desc"
+            }
+          ]
+        }
+      },
+      "id": "c620e75d-3192-45aa-a4de-699a5f6193d8",
+      "name": "Get Draft Fallback (Space)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        880,
+        384
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "YOUR_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      },
+      "notes": "Gdy brak dokładnego chat_thread_id — najnowszy pending w tej samej przestrzeni"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "47aff0f8-3d12-4d0d-a322-cb2319cd999e",
+      "name": "IF Draft Matched (Fallback)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://chat.googleapis.com/v1/spaces/AAQAuUSheK4/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleChatOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: \"⚠️ Nie powiązałem tej wiadomości z żadnym oczekującym draftem. Odpowiedz **w tym samym wątku**, w którym przyszła karta z draftem (albo użyj przycisków na karcie).\\n\\nSzukany wątek: \" + ($('Parse Command Type').item.json.thread_name || \"\") + \"\\nTwoja przestrzeń: \" + ($('Parse Command Type').item.json.space || \"\"), thread: { name: $('Parse Command Type').item.json.thread_name } }) }}",
+        "options": {}
+      },
+      "id": "4327414f-c8bb-4b4b-86ca-fe3393d2dab1",
+      "name": "Chat: No Draft For Thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        528
+      ],
+      "credentials": {
+        "googleChatOAuth2Api": {
+          "id": "YOUR_GOOGLE_CHAT_CREDENTIAL_ID",
+          "name": "Google Chat OAuth2"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "Webhook Chat Feedback": [
+      {
+        "json": {
+          "headers": {
+            "host": "n8n.sztukaautomatyzacji.pl",
+            "user-agent": "curl/8.7.1",
+            "content-length": "150",
+            "accept": "*/*",
+            "content-type": "application/json",
+            "x-forwarded-for": "45.11.60.99",
+            "x-forwarded-host": "n8n.sztukaautomatyzacji.pl",
+            "x-forwarded-port": "443",
+            "x-forwarded-proto": "https",
+            "x-forwarded-server": "a7a304cb0325",
+            "x-real-ip": "45.11.60.99",
+            "accept-encoding": "gzip"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "type": "MESSAGE",
+            "message": {
+              "text": "test korekta",
+              "sender": {
+                "displayName": "Tomasz"
+              }
+            },
+            "space": {
+              "name": "spaces/AAQAuUSheK4"
+            }
+          },
+          "webhookUrl": "https://n8n.sztukaautomatyzacji.pl/webhook/chat-feedback",
+          "executionMode": "production"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Get Pending Draft (Correction)": {
+      "main": [
+        [
+          {
+            "node": "IF Draft Matched (Exact)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Correction Context": {
+      "main": [
+        [
+          {
+            "node": "Apply Correction with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Correction with AI": {
+      "main": [
+        [
+          {
+            "node": "Execute Correction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Correction": {
+      "main": [
+        [
+          {
+            "node": "Prepare Corrected Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Corrected Draft": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Gmail Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Old Gmail Draft": {
+      "main": [
+        [
+          {
+            "node": "Create New Gmail Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create New Gmail Draft": {
+      "main": [
+        [
+          {
+            "node": "Update Airtable (Correction)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Airtable (Correction)": {
+      "main": [
+        [
+          {
+            "node": "Send Corrected Draft to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Draft (Approval)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Send Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Send Data": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Delete Draft After Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Draft After Send": {
+      "main": [
+        [
+          {
+            "node": "Prepare Embedding Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Embedding Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embedding": {
+      "main": [
+        [
+          {
+            "node": "Store in Pinecone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Pinecone": {
+      "main": [
+        [
+          {
+            "node": "Update Airtable (Approved)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Airtable (Approved)": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmation to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Chat Feedback": {
+      "main": [
+        [
+          {
+            "node": "Parse Command Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Command Type": {
+      "main": [
+        [
+          {
+            "node": "IF Correction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Correction": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Draft (Correction)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Approval": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Draft (Approval)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "IF Draft Matched (Exact)": {
+      "main": [
+        [
+          {
+            "node": "Build Correction Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Draft Fallback (Space)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Draft Fallback (Space)": {
+      "main": [
+        [
+          {
+            "node": "IF Draft Matched (Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Draft Matched (Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Build Correction Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Chat: No Draft For Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
